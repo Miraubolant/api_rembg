@@ -22,4 +22,5 @@ RUN mkdir -p uploads results
 EXPOSE 5000
 
 # Lancer l'application avec Gunicorn pour une meilleure performance
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "app:app"]
+# Timeout augmenté à 300 secondes pour permettre le téléchargement du modèle
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--timeout", "300", "app:app"]
