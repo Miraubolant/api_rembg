@@ -1,0 +1,5 @@
+flask==2.0.1
+rembg==2.0.50
+werkzeug==2.0.1
+gunicorn==20.1.0
+pillow==9.5.0
