@@ -27,6 +27,7 @@ def remove_background_api():
         return jsonify({'error': 'Aucune image n\'a été envoyée'}), 400
     
     file = request.files['image']
+    print(f"Fichier reçu: {file.filename}")
     
     # Vérifier si le fichier est valide
     if file.filename == '':
@@ -42,23 +43,35 @@ def remove_background_api():
         input_path = os.path.join(UPLOAD_FOLDER, unique_filename)
         output_path = os.path.join(OUTPUT_FOLDER, unique_filename)
         
+        print(f"Sauvegarde de l'image vers: {input_path}")
         # Sauvegarder l'image
         file.save(input_path)
         
+        print(f"Vérification que le fichier existe: {os.path.exists(input_path)}")
+        
         # Supprimer l'arrière-plan avec rembg
+        print("Début du traitement avec rembg")
         input_image = Image.open(input_path)
+        print(f"Image ouverte, taille: {input_image.size}, mode: {input_image.mode}")
         output_image = remove(input_image)
+        print(f"Traitement terminé, sauvegarde vers: {output_path}")
         output_image.save(output_path)
+        
+        print(f"Vérification que le résultat existe: {os.path.exists(output_path)}")
         
         # Retourner l'image sans arrière-plan
         return send_file(output_path, mimetype='image/png')
     
     except Exception as e:
-        return jsonify({'error': f'Erreur pendant le traitement: {str(e)}'}), 500
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"ERREUR: {str(e)}")
+        print(f"DÉTAILS: {error_details}")
+        return jsonify({'error': f'Erreur pendant le traitement: {str(e)}', 'details': error_details}), 500
     
     finally:
         # Nettoyer les fichiers temporaires
-        if os.path.exists(input_path):
+        if 'input_path' in locals() and os.path.exists(input_path):
             os.remove(input_path)
 
 @app.route('/health', methods=['GET'])
