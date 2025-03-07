@@ -1,5 +1,5 @@
 from flask import Flask, request, jsonify, send_file
-from rembg import remove
+from rembg import remove, new_session
 import os
 import sys
 from werkzeug.utils import secure_filename
@@ -13,6 +13,8 @@ app = Flask(__name__)
 UPLOAD_FOLDER = 'uploads'
 OUTPUT_FOLDER = 'results'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
+ALLOWED_MODELS = {'u2net', 'u2netp', 'u2net_human_seg', 'silueta', 'isnet-general-use'}
+DEFAULT_MODEL = 'u2net'
 
 # Créer les dossiers s'ils n'existent pas
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -31,6 +33,16 @@ def allowed_file(filename):
 @app.route('/remove-background', methods=['POST'])
 def remove_background_api():
     logger.info("Requête reçue sur /remove-background")
+    
+    # Récupérer le modèle spécifié dans la requête (paramètre ou form data)
+    model = request.args.get('model') or request.form.get('model') or DEFAULT_MODEL
+    
+    if model not in ALLOWED_MODELS:
+        logger.warning(f"Modèle non reconnu: {model}, utilisation du modèle par défaut: {DEFAULT_MODEL}")
+        model = DEFAULT_MODEL
+    
+    logger.info(f"Utilisation du modèle: {model}")
+    
     # Vérifier si une image a été envoyée
     if 'image' not in request.files:
         logger.error("Aucune image n'a été envoyée")
@@ -61,14 +73,18 @@ def remove_background_api():
         logger.info(f"Vérification que le fichier existe: {os.path.exists(input_path)}")
         if not os.path.exists(input_path):
             raise Exception(f"Le fichier n'a pas été sauvegardé correctement à {input_path}")
-            
+        
+        # Créer une session rembg avec le modèle spécifié
+        logger.info(f"Création d'une session rembg avec le modèle {model}")
+        session = new_session(model)
+        
         # Supprimer l'arrière-plan avec rembg
         logger.info("Début du traitement avec rembg")
         input_image = Image.open(input_path)
         logger.info(f"Image ouverte, taille: {input_image.size}, mode: {input_image.mode}")
         
-        logger.info("Application de rembg...")
-        output_image = remove(input_image)
+        logger.info(f"Application de rembg avec le modèle {model}...")
+        output_image = remove(input_image, session=session)
         logger.info(f"Traitement terminé avec succès, mode de l'image résultante: {output_image.mode}")
         
         # Envoyer directement l'image en PNG avec transparence via BytesIO
@@ -119,6 +135,22 @@ def remove_background_api():
                 logger.info(f"Fichier d'entrée supprimé: {input_path}")
             except Exception as e:
                 logger.warning(f"Impossible de supprimer le fichier d'entrée: {str(e)}")
+
+@app.route('/models', methods=['GET'])
+def list_models():
+    """Endpoint pour lister tous les modèles disponibles"""
+    logger.info("Requête reçue sur /models")
+    return jsonify({
+        'default': DEFAULT_MODEL,
+        'available_models': list(ALLOWED_MODELS),
+        'descriptions': {
+            'u2net': 'Modèle général, bon équilibre entre qualité et vitesse',
+            'u2netp': 'Version plus légère et rapide, qualité légèrement inférieure',
+            'u2net_human_seg': 'Optimisé pour la segmentation humaine',
+            'silueta': 'Spécialisé dans les silhouettes humaines',
+            'isnet-general-use': 'Modèle plus récent avec une bonne qualité générale'
+        }
+    })
 
 @app.route('/health', methods=['GET'])
 def health_check():
