@@ -1,4 +1,5 @@
 from flask import Flask, request, jsonify, send_file
+from flask_cors import CORS
 from rembg import remove, new_session
 import os
 import sys
@@ -8,6 +9,8 @@ from io import BytesIO
 from PIL import Image
 
 app = Flask(__name__)
+# Activer CORS pour toutes les routes et tous les domaines
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
@@ -30,8 +33,12 @@ logger = logging.getLogger(__name__)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-@app.route('/remove-background', methods=['POST'])
+@app.route('/remove-background', methods=['POST', 'OPTIONS'])
 def remove_background_api():
+    # Gérer les requêtes OPTIONS (pre-flight) pour CORS
+    if request.method == 'OPTIONS':
+        return '', 200
+        
     logger.info("Requête reçue sur /remove-background")
     
     # Récupérer le modèle spécifié dans la requête (paramètre ou form data)
@@ -112,11 +119,14 @@ def remove_background_api():
             as_attachment=True  # Force le téléchargement plutôt que l'affichage
         )
         
-        # Ajouter des en-têtes pour éviter la mise en cache
+        # Ajouter des en-têtes pour éviter la mise en cache et permettre CORS
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
         response.headers["Content-Length"] = str(img_size)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         
         return response
     
@@ -136,11 +146,15 @@ def remove_background_api():
             except Exception as e:
                 logger.warning(f"Impossible de supprimer le fichier d'entrée: {str(e)}")
 
-@app.route('/models', methods=['GET'])
+@app.route('/models', methods=['GET', 'OPTIONS'])
 def list_models():
     """Endpoint pour lister tous les modèles disponibles"""
+    # Gérer les requêtes OPTIONS (pre-flight) pour CORS
+    if request.method == 'OPTIONS':
+        return '', 200
+        
     logger.info("Requête reçue sur /models")
-    return jsonify({
+    response = jsonify({
         'default': DEFAULT_MODEL,
         'available_models': list(ALLOWED_MODELS),
         'descriptions': {
@@ -151,15 +165,37 @@ def list_models():
             'isnet-general-use': 'Modèle plus récent avec une bonne qualité générale'
         }
     })
+    
+    # Ajouter des en-têtes CORS
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    
+    return response
 
-@app.route('/health', methods=['GET'])
+@app.route('/health', methods=['GET', 'OPTIONS'])
 def health_check():
+    # Gérer les requêtes OPTIONS (pre-flight) pour CORS
+    if request.method == 'OPTIONS':
+        return '', 200
+        
     logger.info("Requête reçue sur /health")
-    return jsonify({'status': 'ok'})
+    response = jsonify({'status': 'ok'})
+    
+    # Ajouter des en-têtes CORS
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    
+    return response
 
-@app.route('/test-image', methods=['GET'])
+@app.route('/test-image', methods=['GET', 'OPTIONS'])
 def test_image():
     """Endpoint de test qui génère une simple image avec transparence"""
+    # Gérer les requêtes OPTIONS (pre-flight) pour CORS
+    if request.method == 'OPTIONS':
+        return '', 200
+        
     logger.info("Requête reçue sur /test-image")
     try:
         # Créer une image avec transparence (cercle rouge sur fond transparent)
@@ -187,10 +223,14 @@ def test_image():
             as_attachment=True
         )
         
+        # Ajouter des en-têtes pour éviter la mise en cache et permettre CORS
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
         response.headers["Content-Length"] = str(img_size)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         
         return response
     except Exception as e:
