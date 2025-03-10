@@ -9,15 +9,8 @@ from io import BytesIO
 from PIL import Image
 
 app = Flask(__name__)
-# Autoriser uniquement les domaines spécifiés
-ALLOWED_ORIGINS = [
-    'https://miraubolant.com',
-    'https://www.miraubolant.com',
-    'https://miremote.miraubolant.com'
-]
-
-# Configurer CORS pour n'autoriser que les domaines spécifiés
-CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
+# Activer CORS pour toutes les routes et tous les domaines
+CORS(app, resources={r"/*": {"origins": "*"}})
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
@@ -126,11 +119,14 @@ def remove_background_api():
             as_attachment=True  # Force le téléchargement plutôt que l'affichage
         )
         
-        # Ajouter des en-têtes pour éviter la mise en cache
+        # Ajouter des en-têtes pour éviter la mise en cache et permettre CORS
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
         response.headers["Content-Length"] = str(img_size)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "POST, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         
         return response
     
@@ -170,6 +166,11 @@ def list_models():
         }
     })
     
+    # Ajouter des en-têtes CORS
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
+    
     return response
 
 @app.route('/health', methods=['GET', 'OPTIONS'])
@@ -180,6 +181,11 @@ def health_check():
         
     logger.info("Requête reçue sur /health")
     response = jsonify({'status': 'ok'})
+    
+    # Ajouter des en-têtes CORS
+    response.headers["Access-Control-Allow-Origin"] = "*"
+    response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type"
     
     return response
 
@@ -217,11 +223,14 @@ def test_image():
             as_attachment=True
         )
         
-        # Ajouter des en-têtes pour éviter la mise en cache
+        # Ajouter des en-têtes pour éviter la mise en cache et permettre CORS
         response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
         response.headers["Pragma"] = "no-cache"
         response.headers["Expires"] = "0"
         response.headers["Content-Length"] = str(img_size)
+        response.headers["Access-Control-Allow-Origin"] = "*"
+        response.headers["Access-Control-Allow-Methods"] = "GET, OPTIONS"
+        response.headers["Access-Control-Allow-Headers"] = "Content-Type"
         
         return response
     except Exception as e:
