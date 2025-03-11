@@ -7,7 +7,6 @@ from werkzeug.utils import secure_filename
 import uuid
 from io import BytesIO
 from PIL import Image
-import numpy as np
 
 app = Flask(__name__)
 # Activer CORS pour tous les domaines
@@ -20,36 +19,6 @@ ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 
 # Récupérer la clé API depuis les variables d'environnement
 BRIA_API_TOKEN = os.environ.get('BRIA_API_TOKEN')
-
-# Modèles disponibles optimisés pour la mode
-ALLOWED_MODELS = {
-    'standard': {
-        'name': 'Standard (u2net)',
-        'description': 'Modèle général, bon équilibre entre qualité et vitesse',
-        'method': 'rembg',
-        'model_param': 'u2net'
-    },
-    'clothing': {
-        'name': 'Vêtements et accessoires',
-        'description': 'Optimisé pour les vêtements, accessoires et détails de mode',
-        'method': 'rembg',
-        'model_param': 'u2net_human_seg'
-    },
-    'fast': {
-        'name': 'Traitement rapide',
-        'description': 'Pour traiter rapidement de nombreuses images',
-        'method': 'rembg',
-        'model_param': 'u2netp'
-    },
-    'bria': {
-        'name': 'Bria.ai RMBG 2.0',
-        'description': 'Modèle haute qualité via API Bria.ai',
-        'method': 'bria',
-        'model_param': 'default'
-    }
-}
-
-DEFAULT_MODEL = 'clothing'
 
 # Créer les dossiers s'ils n'existent pas
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -65,21 +34,7 @@ logger = logging.getLogger(__name__)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-# Fonctions pour différentes méthodes de suppression d'arrière-plan
-def process_with_rembg(input_image, model='u2net'):
-    """Traitement avec rembg"""
-    from rembg import remove, new_session
-    
-    try:
-        # Créer une session rembg avec le modèle spécifié
-        session = new_session(model)
-        # Supprimer l'arrière-plan
-        return remove(input_image, session=session)
-    except Exception as e:
-        logger.error(f"Erreur lors du traitement avec rembg: {str(e)}")
-        raise
-
-def process_with_bria(input_image, model_param=None, content_moderation=False):
+def process_with_bria(input_image, content_moderation=False):
     """Traitement avec l'API Bria.ai RMBG 2.0"""
     try:
         # Vérifier si la clé API est disponible
@@ -134,34 +89,6 @@ def process_with_bria(input_image, model_param=None, content_moderation=False):
         logger.error(f"Erreur lors du traitement avec Bria.ai: {str(e)}")
         raise
 
-def post_process_fashion(image):
-    """Post-traitement optimisé pour la mode"""
-    try:
-        # Convertir en RGBA si ce n'est pas déjà le cas
-        if image.mode != 'RGBA':
-            image = image.convert('RGBA')
-        
-        # Récupérer le canal alpha
-        r, g, b, a = image.split()
-        
-        # Appliquer un léger flou au canal alpha pour adoucir les bords
-        from PIL import ImageFilter
-        a_smooth = a.filter(ImageFilter.GaussianBlur(radius=0.5))
-        
-        # Améliorer le contraste du masque alpha
-        from PIL import ImageEnhance
-        enhancer = ImageEnhance.Contrast(a_smooth)
-        a_enhanced = enhancer.enhance(1.2)
-        
-        # Recombiner les canaux
-        result = Image.merge('RGBA', (r, g, b, a_enhanced))
-        
-        return result
-    except Exception as e:
-        logger.error(f"Erreur lors du post-traitement: {str(e)}")
-        # En cas d'erreur, retourner l'image originale
-        return image
-
 @app.route('/remove-background', methods=['POST', 'OPTIONS'])
 def remove_background_api():
     # Gérer les requêtes OPTIONS (pre-flight) pour CORS
@@ -170,21 +97,8 @@ def remove_background_api():
         
     logger.info("Requête reçue sur /remove-background")
     
-    # Récupérer le modèle spécifié dans la requête
-    model_key = request.args.get('model') or request.form.get('model') or DEFAULT_MODEL
-    post_process = request.args.get('post_process', 'true').lower() in ('true', '1', 't', 'y', 'yes')
+    # Récupérer le paramètre de modération de contenu
     content_moderation = request.args.get('content_moderation', 'false').lower() in ('true', '1', 't', 'y', 'yes')
-    
-    # Vérifier si le modèle est valide
-    if model_key not in ALLOWED_MODELS:
-        logger.warning(f"Modèle non reconnu: {model_key}, utilisation du modèle par défaut: {DEFAULT_MODEL}")
-        model_key = DEFAULT_MODEL
-    
-    # Obtenir les paramètres de méthode et modèle
-    method = ALLOWED_MODELS[model_key]['method']
-    model_param = ALLOWED_MODELS[model_key]['model_param']
-    
-    logger.info(f"Utilisation du modèle: {model_key} ({method} avec {model_param})")
     
     # Vérifier si une image a été envoyée
     if 'image' not in request.files:
@@ -221,20 +135,11 @@ def remove_background_api():
         input_image = Image.open(input_path)
         logger.info(f"Image ouverte, taille: {input_image.size}, mode: {input_image.mode}")
         
-        # Traiter l'image selon la méthode associée au modèle choisi
-        logger.info(f"Début du traitement avec {method} et paramètre {model_param}")
-        
-        if method == 'rembg':
-            output_image = process_with_rembg(input_image, model_param)
-        elif method == 'bria':
-            output_image = process_with_bria(input_image, model_param, content_moderation)
+        # Traiter l'image avec Bria.ai
+        logger.info("Début du traitement avec Bria.ai")
+        output_image = process_with_bria(input_image, content_moderation)
         
         logger.info(f"Traitement terminé avec succès, mode de l'image résultante: {output_image.mode}")
-        
-        # Appliquer un post-traitement optimisé pour la mode si demandé
-        if post_process and method != 'bria':  # Pas besoin de post-traitement pour Bria qui est déjà optimisé
-            logger.info("Application du post-traitement optimisé pour la mode")
-            output_image = post_process_fashion(output_image)
         
         # Envoyer directement l'image en PNG avec transparence via BytesIO
         logger.info("Préparation de l'image PNG avec transparence pour l'envoi")
@@ -284,19 +189,6 @@ def remove_background_api():
                 logger.info(f"Fichier d'entrée supprimé: {input_path}")
             except Exception as e:
                 logger.warning(f"Impossible de supprimer le fichier d'entrée: {str(e)}")
-
-@app.route('/models', methods=['GET', 'OPTIONS'])
-def list_models():
-    """Endpoint pour lister tous les modèles disponibles"""
-    # Gérer les requêtes OPTIONS (pre-flight) pour CORS
-    if request.method == 'OPTIONS':
-        return '', 200
-        
-    logger.info("Requête reçue sur /models")
-    return jsonify({
-        'default_model': DEFAULT_MODEL,
-        'available_models': ALLOWED_MODELS
-    })
 
 @app.route('/health', methods=['GET', 'OPTIONS'])
 def health_check():
