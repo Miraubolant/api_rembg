@@ -2,6 +2,7 @@ from flask import Flask, request, jsonify, send_file
 from flask_cors import CORS
 import os
 import sys
+import requests
 from werkzeug.utils import secure_filename
 import uuid
 from io import BytesIO
@@ -17,6 +18,9 @@ UPLOAD_FOLDER = 'uploads'
 OUTPUT_FOLDER = 'results'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 
+# Récupérer la clé API depuis les variables d'environnement
+BRIA_API_TOKEN = os.environ.get('BRIA_API_TOKEN')
+
 # Modèles disponibles optimisés pour la mode
 ALLOWED_MODELS = {
     'standard': {
@@ -31,23 +35,17 @@ ALLOWED_MODELS = {
         'method': 'rembg',
         'model_param': 'u2net_human_seg'
     },
-    'portrait': {
-        'name': 'Portraits et mannequins',
-        'description': 'Meilleur pour les photos de mannequins et portraits',
-        'method': 'mediapipe',
-        'model_param': 'selfie'
-    },
-    'detail': {
-        'name': 'Haute précision pour détails',
-        'description': 'Pour capturer les détails fins des textiles et accessoires',
-        'method': 'deeplab',
-        'model_param': 'resnet101'
-    },
     'fast': {
         'name': 'Traitement rapide',
         'description': 'Pour traiter rapidement de nombreuses images',
         'method': 'rembg',
         'model_param': 'u2netp'
+    },
+    'bria': {
+        'name': 'Bria.ai RMBG 2.0',
+        'description': 'Modèle haute qualité via API Bria.ai',
+        'method': 'bria',
+        'model_param': 'default'
     }
 }
 
@@ -81,103 +79,59 @@ def process_with_rembg(input_image, model='u2net'):
         logger.error(f"Erreur lors du traitement avec rembg: {str(e)}")
         raise
 
-def process_with_deeplab(input_image, model='resnet101'):
-    """Traitement avec DeepLabV3"""
+def process_with_bria(input_image, model_param=None, content_moderation=False):
+    """Traitement avec l'API Bria.ai RMBG 2.0"""
     try:
-        import torch
-        import torchvision.transforms as transforms
-        from torchvision.models.segmentation import deeplabv3_resnet50, deeplabv3_resnet101
-
-        if model == 'resnet50':
-            segmentation_model = deeplabv3_resnet50(pretrained=True)
-        elif model == 'resnet101':
-            segmentation_model = deeplabv3_resnet101(pretrained=True)
-        else:  # mobilenetv3_large
-            segmentation_model = torch.hub.load('pytorch/vision', 'deeplabv3_mobilenet_v3_large', pretrained=True)
+        # Vérifier si la clé API est disponible
+        if not BRIA_API_TOKEN:
+            raise Exception("Clé API Bria.ai non configurée. Veuillez définir la variable d'environnement BRIA_API_TOKEN.")
+            
+        # Sauvegarder l'image temporairement pour l'envoyer via API Bria
+        temp_file = BytesIO()
+        input_image.save(temp_file, format='PNG')
+        temp_file.seek(0)
         
-        segmentation_model.eval()
+        # Préparer la requête à l'API Bria
+        url = "https://engine.prod.bria-api.com/v1/background/remove"
+        headers = {
+            "api_token": BRIA_API_TOKEN
+        }
         
-        # Prétraitement
-        preprocess = transforms.Compose([
-            transforms.ToTensor(),
-            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
-        ])
+        files = {
+            'file': ('image.png', temp_file, 'image/png')
+        }
         
-        input_tensor = preprocess(input_image)
-        input_batch = input_tensor.unsqueeze(0)
+        data = {}
+        if content_moderation:
+            data['content_moderation'] = 'true'
         
-        with torch.no_grad():
-            output = segmentation_model(input_batch)['out'][0]
-            output_predictions = output.argmax(0).byte().cpu().numpy()
+        logger.info("Envoi de l'image à Bria.ai API")
+        response = requests.post(url, headers=headers, files=files, data=data)
         
-        # Créer un masque pour les personnes (classe 15 dans COCO)
-        mask = np.zeros(output_predictions.shape, dtype=np.uint8)
-        mask[output_predictions == 15] = 255
+        if response.status_code != 200:
+            logger.error(f"Erreur API Bria: {response.status_code} - {response.text}")
+            raise Exception(f"Erreur API Bria: {response.status_code} - {response.text}")
         
-        # Appliquer le masque
-        input_array = np.array(input_image)
-        result_array = np.zeros((input_array.shape[0], input_array.shape[1], 4), dtype=np.uint8)
-        result_array[:, :, :3] = input_array[:, :, :3]
-        result_array[:, :, 3] = mask
+        # Récupérer l'URL de l'image résultante
+        result_data = response.json()
+        result_url = result_data.get('result_url')
         
-        return Image.fromarray(result_array)
+        if not result_url:
+            raise Exception("Aucune URL de résultat retournée par Bria API")
+        
+        logger.info(f"Image traitée avec succès par Bria.ai, URL résultante: {result_url}")
+        
+        # Télécharger l'image résultante
+        image_response = requests.get(result_url)
+        if image_response.status_code != 200:
+            raise Exception(f"Erreur lors du téléchargement de l'image résultante: {image_response.status_code}")
+        
+        # Ouvrir l'image téléchargée avec PIL
+        result_image = Image.open(BytesIO(image_response.content))
+        
+        return result_image
     except Exception as e:
-        logger.error(f"Erreur lors du traitement avec DeepLabV3: {str(e)}")
-        raise
-
-def process_with_mediapipe(input_image, model='selfie'):
-    """Traitement avec MediaPipe (spécifique aux personnes)"""
-    try:
-        import mediapipe as mp
-        
-        # Convertir l'image PIL en array numpy
-        img_np = np.array(input_image)
-        
-        if model == 'selfie':
-            # Utiliser MediaPipe Selfie Segmentation
-            mp_selfie_segmentation = mp.solutions.selfie_segmentation
-            selfie_segmentation = mp_selfie_segmentation.SelfieSegmentation(model_selection=1)  # 0 pour paysage, 1 pour portrait
-            
-            # Traiter l'image
-            results = selfie_segmentation.process(img_np)
-            
-            # Obtenir le masque
-            mask = results.segmentation_mask
-            
-            # Convertir le masque en valeurs 0-255
-            mask = (mask * 255).astype(np.uint8)
-            
-        else:  # model == 'general'
-            # Utiliser MediaPipe Holistic pour une segmentation plus générale
-            mp_holistic = mp.solutions.holistic
-            holistic = mp_holistic.Holistic(
-                static_image_mode=True,
-                model_complexity=2,
-                enable_segmentation=True
-            )
-            
-            # Traiter l'image
-            results = holistic.process(img_np)
-            
-            # Obtenir le masque
-            mask = results.segmentation_mask
-            
-            if mask is None:
-                # Si aucun masque n'est disponible, retourner une version simple
-                logger.warning("Aucun masque disponible de MediaPipe, utilisation d'un masque de secours")
-                # Créer un masque de secours (tout est en avant-plan)
-                mask = np.ones((img_np.shape[0], img_np.shape[1]), dtype=np.uint8) * 255
-            else:
-                mask = (mask * 255).astype(np.uint8)
-        
-        # Créer une image RGBA
-        result = np.zeros((img_np.shape[0], img_np.shape[1], 4), dtype=np.uint8)
-        result[:, :, 0:3] = img_np[:, :, 0:3]
-        result[:, :, 3] = mask
-        
-        return Image.fromarray(result)
-    except Exception as e:
-        logger.error(f"Erreur lors du traitement avec MediaPipe: {str(e)}")
+        logger.error(f"Erreur lors du traitement avec Bria.ai: {str(e)}")
         raise
 
 def post_process_fashion(image):
@@ -219,6 +173,7 @@ def remove_background_api():
     # Récupérer le modèle spécifié dans la requête
     model_key = request.args.get('model') or request.form.get('model') or DEFAULT_MODEL
     post_process = request.args.get('post_process', 'true').lower() in ('true', '1', 't', 'y', 'yes')
+    content_moderation = request.args.get('content_moderation', 'false').lower() in ('true', '1', 't', 'y', 'yes')
     
     # Vérifier si le modèle est valide
     if model_key not in ALLOWED_MODELS:
@@ -271,15 +226,13 @@ def remove_background_api():
         
         if method == 'rembg':
             output_image = process_with_rembg(input_image, model_param)
-        elif method == 'deeplab':
-            output_image = process_with_deeplab(input_image, model_param)
-        elif method == 'mediapipe':
-            output_image = process_with_mediapipe(input_image, model_param)
+        elif method == 'bria':
+            output_image = process_with_bria(input_image, model_param, content_moderation)
         
         logger.info(f"Traitement terminé avec succès, mode de l'image résultante: {output_image.mode}")
         
         # Appliquer un post-traitement optimisé pour la mode si demandé
-        if post_process:
+        if post_process and method != 'bria':  # Pas besoin de post-traitement pour Bria qui est déjà optimisé
             logger.info("Application du post-traitement optimisé pour la mode")
             output_image = post_process_fashion(output_image)
         
