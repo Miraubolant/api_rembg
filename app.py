@@ -241,49 +241,16 @@ def remove_background_api():
             except Exception as e:
                 logger.warning(f"Impossible de supprimer le fichier d'entrée: {str(e)}")
 
-@app.route('/generate-api-key', methods=['POST', 'OPTIONS'])
+@app.route('/generate-api-key', methods=['POST'])
 def generate_api_key():
     """Génère une API key pour un client autorisé"""
-    # Gérer les requêtes OPTIONS (pre-flight) pour CORS
-    if request.method == 'OPTIONS':
-        return '', 200
-    
-    # Logs de débogage pour identifier le problème
-    logger.info(f"Requête reçue sur /generate-api-key")
-    
-    # Récupérer les données JSON de façon plus robuste
-    try:
-        data = request.get_json(force=True, silent=True)
-        logger.info(f"JSON récupéré: {data}")
-    except Exception as e:
-        logger.error(f"Erreur lors de la récupération du JSON: {str(e)}")
-        # Essayer de lire les données brutes
-        raw_data = request.get_data()
-        logger.info(f"Données brutes reçues: {raw_data}")
-        
-        return jsonify({
-            'error': 'Impossible de parser le JSON',
-            'details': str(e)
-        }), 400
-    
-    if data is None:
-        logger.error("Aucune donnée JSON reçue ou format invalide")
-        return jsonify({'error': 'Aucune donnée JSON reçue ou format invalide'}), 400
-    
-    # Récupérer les paramètres
-    admin_password = data.get('admin_password')
-    client_id = data.get('client_id', 'default')
-    
-    logger.info(f"ADMIN_PASSWORD configuré: {'Oui' if ADMIN_PASSWORD else 'Non'}")
-    logger.info(f"API_KEY_SECRET configuré: {'Oui' if API_KEY_SECRET else 'Non'}")
-    logger.info(f"Mot de passe reçu: {admin_password}")
-    logger.info(f"Client ID reçu: {client_id}")
-    
+    # Cette route devrait être sécurisée par le mot de passe admin
+    admin_password = request.json.get('admin_password')
     if not ADMIN_PASSWORD or admin_password != ADMIN_PASSWORD:
-        logger.warning(f"Authentification échouée: mot de passe incorrect ou non configuré")
         return jsonify({'error': 'Non autorisé'}), 403
     
     # Générer une nouvelle clé API
+    client_id = request.json.get('client_id', 'default')
     new_api_key = hashlib.sha256(f"{client_id}:{time.time()}:{os.urandom(16).hex()}".encode()).hexdigest()
     
     # Générer un exemple de comment utiliser cette clé
