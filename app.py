@@ -241,12 +241,25 @@ def remove_background_api():
             except Exception as e:
                 logger.warning(f"Impossible de supprimer le fichier d'entrée: {str(e)}")
 
-@app.route('/generate-api-key', methods=['POST'])
+@app.route('/generate-api-key', methods=['POST', 'OPTIONS'])
 def generate_api_key():
     """Génère une API key pour un client autorisé"""
+    # Gérer les requêtes OPTIONS (pre-flight) pour CORS
+    if request.method == 'OPTIONS':
+        return '', 200
+    
+    # Logs de débogage pour identifier le problème
+    logger.info(f"Requête reçue sur /generate-api-key")
+    logger.info(f"Contenu de la requête: {request.json}")
+    logger.info(f"ADMIN_PASSWORD configuré: {'Oui' if ADMIN_PASSWORD else 'Non'}")
+    logger.info(f"API_KEY_SECRET configuré: {'Oui' if API_KEY_SECRET else 'Non'}")
+    
     # Cette route devrait être sécurisée par le mot de passe admin
     admin_password = request.json.get('admin_password')
+    logger.info(f"Mot de passe reçu: {admin_password}")
+    
     if not ADMIN_PASSWORD or admin_password != ADMIN_PASSWORD:
+        logger.warning(f"Authentification échouée: mot de passe incorrect ou non configuré")
         return jsonify({'error': 'Non autorisé'}), 403
     
     # Générer une nouvelle clé API
