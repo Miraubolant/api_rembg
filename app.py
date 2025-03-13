@@ -3,7 +3,6 @@ from flask_cors import CORS
 import os
 import sys
 import requests
-import hashlib
 import time
 from werkzeug.utils import secure_filename
 import uuid
@@ -14,12 +13,13 @@ app = Flask(__name__)
 
 # Récupérer les variables d'environnement
 BRIA_API_TOKEN = os.environ.get('BRIA_API_TOKEN')
-API_KEY_SECRET = os.environ.get('API_KEY_SECRET')
-ADMIN_PASSWORD = os.environ.get('ADMIN_PASSWORD')
 
 # Obtenir les domaines autorisés depuis une variable d'environnement
 allowed_origins_str = os.environ.get('ALLOWED_ORIGINS', 'https://miremover.fr,http://miremover.fr')
 ALLOWED_ORIGINS = [origin.strip() for origin in allowed_origins_str.split(',')]
+
+# Configuration des IPs autorisées
+AUTHORIZED_IPS = os.environ.get('AUTHORIZED_IPS', '127.0.0.1').split(',')
 
 # Configuration CORS avec les domaines autorisés
 CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
@@ -43,33 +43,19 @@ logger = logging.getLogger(__name__)
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
-def verify_api_key(api_key, timestamp, signature):
-    """Vérifie si l'API key est valide"""
-    # Si l'API_KEY_SECRET n'est pas configuré, désactiver la vérification en développement
-    if not API_KEY_SECRET:
-        logger.warning("API_KEY_SECRET non configuré, vérification d'API désactivée")
-        return True
+# Middleware pour vérifier l'IP source
+@app.before_request
+def restrict_access_by_ip():
+    # Autoriser toujours les requêtes OPTIONS pour CORS
+    if request.method == 'OPTIONS':
+        return None
         
-    # Vérifier si le timestamp n'est pas trop ancien (15 minutes max)
-    try:
-        current_time = int(time.time())
-        if current_time - int(timestamp) > 900:  # 15 minutes
-            logger.warning(f"Timestamp trop ancien: {timestamp} vs {current_time}")
-            return False
-    except ValueError:
-        logger.warning(f"Timestamp invalide: {timestamp}")
-        return False
+    client_ip = request.remote_addr
     
-    # Recréer la signature pour vérification
-    message = f"{api_key}:{timestamp}"
-    expected_signature = hashlib.sha256(f"{message}:{API_KEY_SECRET}".encode()).hexdigest()
-    
-    # Comparer les signatures
-    is_valid = signature == expected_signature
-    if not is_valid:
-        logger.warning(f"Signature invalide. Attendue: {expected_signature}, Reçue: {signature}")
-    
-    return is_valid
+    # Vérifier si l'IP est autorisée
+    if client_ip not in AUTHORIZED_IPS:
+        logger.warning(f"Tentative d'accès non autorisée depuis l'IP: {client_ip}")
+        return jsonify({'error': 'Accès non autorisé'}), 403
 
 def process_with_bria(input_image, content_moderation=False):
     """Traitement avec l'API Bria.ai RMBG 2.0"""
@@ -131,20 +117,6 @@ def remove_background_api():
     # Gérer les requêtes OPTIONS (pre-flight) pour CORS
     if request.method == 'OPTIONS':
         return '', 200
-    
-    # Vérifier l'API key si API_KEY_SECRET est configuré
-    if API_KEY_SECRET:
-        api_key = request.headers.get('X-API-Key')
-        timestamp = request.headers.get('X-Timestamp')
-        signature = request.headers.get('X-Signature')
-        
-        if not all([api_key, timestamp, signature]):
-            logger.warning("Tentative d'accès sans authentification")
-            return jsonify({'error': 'Authentification requise'}), 401
-        
-        if not verify_api_key(api_key, timestamp, signature):
-            logger.warning(f"Authentification échouée pour la clé: {api_key}")
-            return jsonify({'error': 'Authentification invalide'}), 403
         
     logger.info("Requête reçue sur /remove-background")
     
@@ -241,36 +213,6 @@ def remove_background_api():
             except Exception as e:
                 logger.warning(f"Impossible de supprimer le fichier d'entrée: {str(e)}")
 
-@app.route('/generate-api-key', methods=['POST'])
-def generate_api_key():
-    """Génère une API key pour un client autorisé"""
-    # Cette route devrait être sécurisée par le mot de passe admin
-    admin_password = request.json.get('admin_password')
-    if not ADMIN_PASSWORD or admin_password != ADMIN_PASSWORD:
-        return jsonify({'error': 'Non autorisé'}), 403
-    
-    # Générer une nouvelle clé API
-    client_id = request.json.get('client_id', 'default')
-    new_api_key = hashlib.sha256(f"{client_id}:{time.time()}:{os.urandom(16).hex()}".encode()).hexdigest()
-    
-    # Générer un exemple de comment utiliser cette clé
-    timestamp = str(int(time.time()))
-    message = f"{new_api_key}:{timestamp}"
-    signature = hashlib.sha256(f"{message}:{API_KEY_SECRET}".encode()).hexdigest()
-    
-    return jsonify({
-        'api_key': new_api_key,
-        'client_id': client_id,
-        'created': int(timestamp),
-        'usage_example': {
-            'headers': {
-                'X-API-Key': new_api_key,
-                'X-Timestamp': timestamp,
-                'X-Signature': signature
-            }
-        }
-    })
-
 @app.route('/health', methods=['GET', 'OPTIONS'])
 def health_check():
     # Gérer les requêtes OPTIONS (pre-flight) pour CORS
@@ -281,8 +223,9 @@ def health_check():
     return jsonify({
         'status': 'ok',
         'security': {
-            'api_key_required': bool(API_KEY_SECRET),
-            'allowed_origins': ALLOWED_ORIGINS
+            'ip_restriction': True,
+            'allowed_origins': ALLOWED_ORIGINS,
+            'authorized_ips': AUTHORIZED_IPS
         }
     })
 
