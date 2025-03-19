@@ -13,9 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copier les fichiers de dépendances
 COPY requirements.txt .
 
-# Installer les dépendances Python avec pip mis à jour
-RUN pip install --upgrade pip && \
-    pip install --no-cache-dir -r requirements.txt
+# Installer les dépendances Python
+RUN pip install --no-cache-dir -r requirements.txt
 
 # Copier le code de l'application
 COPY app.py .
@@ -26,8 +25,8 @@ RUN mkdir -p uploads results logs
 # Exposer le port
 EXPOSE 5000
 
-# Variable d'environnement pour utiliser uvloop et désactiver le buffer pour les logs
+# Variable d'environnement pour désactiver le buffer pour les logs
 ENV PYTHONUNBUFFERED=1
 
-# Lancer l'application avec Hypercorn pour de meilleures performances
-CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:5000", "--workers", "4", "--worker-class", "uvloop", "--keepalive", "65", "--timeout", "300"]
+# Lancer l'application avec Gunicorn en mode optimisé
+CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "4", "--threads", "4", "--timeout", "300", "app:app"]
