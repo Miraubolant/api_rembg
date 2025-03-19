@@ -13,8 +13,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 # Copier les fichiers de dépendances
 COPY requirements.txt .
 
-# Installer les dépendances Python
-RUN pip install --no-cache-dir -r requirements.txt
+# Installer les dépendances Python avec pip mis à jour
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
 
 # Copier le code de l'application
 COPY app.py .
@@ -30,6 +31,3 @@ ENV PYTHONUNBUFFERED=1
 
 # Lancer l'application avec Hypercorn pour de meilleures performances
 CMD ["hypercorn", "app:app", "--bind", "0.0.0.0:5000", "--workers", "4", "--worker-class", "uvloop", "--keepalive", "65", "--timeout", "300"]
-
-# Alternative: utiliser Gunicorn avec workers Uvicorn
-# CMD ["gunicorn", "-w", "4", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:5000", "--timeout", "300", "app:app"]
