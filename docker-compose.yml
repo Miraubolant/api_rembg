@@ -8,14 +8,4 @@ services:
     volumes:
       - ./uploads:/app/uploads
       - ./results:/app/results
-      - ./logs:/app/logs
-    environment:
-      - BRIA_API_TOKEN=${BRIA_API_TOKEN}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://miremover.fr,http://miremover.fr}
-      - AUTHORIZED_IPS=${AUTHORIZED_IPS:-127.0.0.1}
     restart: always
-    deploy:
-      resources:
-        limits:
-          cpus: '2'
-          memory: 2G

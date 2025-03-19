@@ -8,10 +8,6 @@ from werkzeug.utils import secure_filename
 import uuid
 from io import BytesIO
 from PIL import Image
-import concurrent.futures
-import threading
-import logging
-import logging.handlers
 
 app = Flask(__name__)
 
@@ -38,20 +34,11 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Configuration des logs
+import logging
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     stream=sys.stdout)
 logger = logging.getLogger(__name__)
-
-# Ajouter une rotation des logs
-log_handler = logging.handlers.RotatingFileHandler(
-    'app.log', maxBytes=10*1024*1024, backupCount=5
-)
-log_handler.setLevel(logging.INFO)
-logger.addHandler(log_handler)
-
-# Pool de threads pour les opérations intensives
-thread_pool = concurrent.futures.ThreadPoolExecutor(max_workers=4)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -69,28 +56,6 @@ def restrict_access_by_ip():
     if client_ip not in AUTHORIZED_IPS:
         logger.warning(f"Tentative d'accès non autorisée depuis l'IP: {client_ip}")
         return jsonify({'error': 'Accès non autorisé'}), 403
-
-def optimize_image_for_processing(image, max_size=1500):
-    """
-    Optimise l'image avant traitement :
-    1. Redimensionne si trop grande
-    2. Compresse
-    """
-    # Redimensionner si nécessaire
-    width, height = image.size
-    if width > max_size or height > max_size:
-        # Garder le ratio
-        if width > height:
-            new_width = max_size
-            new_height = int(height * (max_size / width))
-        else:
-            new_height = max_size
-            new_width = int(width * (max_size / height))
-        
-        image = image.resize((new_width, new_height), Image.LANCZOS)
-        logger.info(f"Image redimensionnée à {new_width}x{new_height}")
-    
-    return image
 
 def process_with_bria(input_image, content_moderation=False):
     """Traitement avec l'API Bria.ai RMBG 2.0"""
@@ -119,8 +84,7 @@ def process_with_bria(input_image, content_moderation=False):
             data['content_moderation'] = 'true'
         
         logger.info("Envoi de l'image à Bria.ai API")
-        timeout = (5, 30)  # (connect timeout, read timeout)
-        response = requests.post(url, headers=headers, files=files, data=data, timeout=timeout)
+        response = requests.post(url, headers=headers, files=files, data=data)
         
         if response.status_code != 200:
             logger.error(f"Erreur API Bria: {response.status_code} - {response.text}")
@@ -136,7 +100,7 @@ def process_with_bria(input_image, content_moderation=False):
         logger.info(f"Image traitée avec succès par Bria.ai, URL résultante: {result_url}")
         
         # Télécharger l'image résultante
-        image_response = requests.get(result_url, timeout=timeout)
+        image_response = requests.get(result_url)
         if image_response.status_code != 200:
             raise Exception(f"Erreur lors du téléchargement de l'image résultante: {image_response.status_code}")
         
@@ -177,20 +141,26 @@ def remove_background_api():
         return jsonify({'error': f'Format de fichier non supporté. Formats acceptés: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
     
     try:
-        # Lire le fichier en mémoire
-        file_data = file.read()
-        input_image = Image.open(BytesIO(file_data))
-        logger.info(f"Image ouverte, taille: {input_image.size}, mode: {input_image.mode}")
+        # Générer un nom de fichier unique
+        filename = secure_filename(file.filename)
+        unique_filename = f"{uuid.uuid4()}_{filename}"
+        input_path = os.path.join(UPLOAD_FOLDER, unique_filename)
         
-        # Optimiser l'image avant envoi
-        input_image = optimize_image_for_processing(input_image)
+        logger.info(f"Sauvegarde de l'image vers: {input_path}")
+        # Sauvegarder l'image
+        file.save(input_path)
+        
+        logger.info(f"Vérification que le fichier existe: {os.path.exists(input_path)}")
+        if not os.path.exists(input_path):
+            raise Exception(f"Le fichier n'a pas été sauvegardé correctement à {input_path}")
+        
+        # Ouvrir l'image
+        input_image = Image.open(input_path)
+        logger.info(f"Image ouverte, taille: {input_image.size}, mode: {input_image.mode}")
         
         # Traiter l'image avec Bria.ai
         logger.info("Début du traitement avec Bria.ai")
-        
-        # Utiliser le pool de threads pour le traitement
-        future = thread_pool.submit(process_with_bria, input_image, content_moderation)
-        output_image = future.result()
+        output_image = process_with_bria(input_image, content_moderation)
         
         logger.info(f"Traitement terminé avec succès, mode de l'image résultante: {output_image.mode}")
         
@@ -235,11 +205,13 @@ def remove_background_api():
         return jsonify({'error': f'Erreur pendant le traitement: {str(e)}', 'details': error_details}), 500
     
     finally:
-        # Nettoyer les ressources
-        if 'input_image' in locals():
-            input_image.close()
-        if 'output_image' in locals():
-            output_image.close()
+        # Nettoyer les fichiers temporaires
+        if 'input_path' in locals() and os.path.exists(input_path):
+            try:
+                os.remove(input_path)
+                logger.info(f"Fichier d'entrée supprimé: {input_path}")
+            except Exception as e:
+                logger.warning(f"Impossible de supprimer le fichier d'entrée: {str(e)}")
 
 @app.route('/health', methods=['GET', 'OPTIONS'])
 def health_check():
@@ -258,6 +230,4 @@ def health_check():
     })
 
 if __name__ == '__main__':
-    # Pour la production, utilisez Gunicorn
-    # gunicorn -w 4 -b 0.0.0.0:5000 --timeout 300 app:app
-    app.run(host='0.0.0.0', port=5000, threaded=True)
+    app.run(host='0.0.0.0', port=5000)
