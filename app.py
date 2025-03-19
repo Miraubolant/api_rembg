@@ -1,15 +1,20 @@
-from flask import Flask, request, jsonify, send_file
-from flask_cors import CORS
+from quart import Quart, request, jsonify, send_file
+from quart_cors import cors
 import os
 import sys
-import requests
+import aiohttp
 import time
 from werkzeug.utils import secure_filename
 import uuid
 from io import BytesIO
 from PIL import Image
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import functools
+import logging
+import logging.handlers
 
-app = Flask(__name__)
+app = Quart(__name__)
 
 # Récupérer les variables d'environnement
 BRIA_API_TOKEN = os.environ.get('BRIA_API_TOKEN')
@@ -22,7 +27,7 @@ ALLOWED_ORIGINS = [origin.strip() for origin in allowed_origins_str.split(',')]
 AUTHORIZED_IPS = os.environ.get('AUTHORIZED_IPS', '127.0.0.1').split(',')
 
 # Configuration CORS avec les domaines autorisés
-CORS(app, resources={r"/*": {"origins": ALLOWED_ORIGINS}})
+app = cors(app, allow_origin=ALLOWED_ORIGINS)
 
 # Configuration
 UPLOAD_FOLDER = 'uploads'
@@ -34,18 +39,62 @@ os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
 
 # Configuration des logs
-import logging
 logging.basicConfig(level=logging.INFO, 
                     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
                     stream=sys.stdout)
 logger = logging.getLogger(__name__)
 
+# Ajouter une rotation des logs
+log_handler = logging.handlers.RotatingFileHandler(
+    'app.log', maxBytes=10*1024*1024, backupCount=5
+)
+log_handler.setLevel(logging.INFO)
+logger.addHandler(log_handler)
+
+# Créer un pool de threads pour les opérations intensives
+thread_pool = ThreadPoolExecutor(max_workers=4)
+
+# Timeout pour les requêtes API externes
+BRIA_API_TIMEOUT = aiohttp.ClientTimeout(total=30)
+
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+# Fonction pour exécuter des tâches bloquantes dans un thread
+async def run_in_thread(func, *args, **kwargs):
+    """Exécute une fonction dans un thread séparé"""
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(
+        thread_pool, 
+        functools.partial(func, *args, **kwargs)
+    )
+
+# Fonction pour optimiser l'image avant traitement
+async def optimize_image_for_processing(image, max_size=1500):
+    """
+    Optimise l'image avant traitement :
+    1. Redimensionne si trop grande
+    2. Compresse
+    """
+    # Redimensionner si nécessaire
+    width, height = image.size
+    if width > max_size or height > max_size:
+        # Garder le ratio
+        if width > height:
+            new_width = max_size
+            new_height = int(height * (max_size / width))
+        else:
+            new_height = max_size
+            new_width = int(width * (max_size / height))
+        
+        image = await run_in_thread(lambda: image.resize((new_width, new_height), Image.LANCZOS))
+        logger.info(f"Image redimensionnée à {new_width}x{new_height}")
+    
+    return image
+
 # Middleware pour vérifier l'IP source
 @app.before_request
-def restrict_access_by_ip():
+async def restrict_access_by_ip():
     # Autoriser toujours les requêtes OPTIONS pour CORS
     if request.method == 'OPTIONS':
         return None
@@ -57,16 +106,16 @@ def restrict_access_by_ip():
         logger.warning(f"Tentative d'accès non autorisée depuis l'IP: {client_ip}")
         return jsonify({'error': 'Accès non autorisé'}), 403
 
-def process_with_bria(input_image, content_moderation=False):
-    """Traitement avec l'API Bria.ai RMBG 2.0"""
+async def process_with_bria(input_image, content_moderation=False):
+    """Traitement asynchrone avec l'API Bria.ai RMBG 2.0"""
     try:
         # Vérifier si la clé API est disponible
         if not BRIA_API_TOKEN:
             raise Exception("Clé API Bria.ai non configurée. Veuillez définir la variable d'environnement BRIA_API_TOKEN.")
             
-        # Sauvegarder l'image temporairement pour l'envoyer via API Bria
+        # Sauvegarder l'image temporairement dans la mémoire
         temp_file = BytesIO()
-        input_image.save(temp_file, format='PNG')
+        await run_in_thread(lambda: input_image.save(temp_file, format='PNG'))
         temp_file.seek(0)
         
         # Préparer la requête à l'API Bria
@@ -75,45 +124,49 @@ def process_with_bria(input_image, content_moderation=False):
             "api_token": BRIA_API_TOKEN
         }
         
-        files = {
-            'file': ('image.png', temp_file, 'image/png')
-        }
-        
-        data = {}
-        if content_moderation:
-            data['content_moderation'] = 'true'
-        
         logger.info("Envoi de l'image à Bria.ai API")
-        response = requests.post(url, headers=headers, files=files, data=data)
         
-        if response.status_code != 200:
-            logger.error(f"Erreur API Bria: {response.status_code} - {response.text}")
-            raise Exception(f"Erreur API Bria: {response.status_code} - {response.text}")
-        
-        # Récupérer l'URL de l'image résultante
-        result_data = response.json()
-        result_url = result_data.get('result_url')
-        
-        if not result_url:
-            raise Exception("Aucune URL de résultat retournée par Bria API")
-        
-        logger.info(f"Image traitée avec succès par Bria.ai, URL résultante: {result_url}")
-        
-        # Télécharger l'image résultante
-        image_response = requests.get(result_url)
-        if image_response.status_code != 200:
-            raise Exception(f"Erreur lors du téléchargement de l'image résultante: {image_response.status_code}")
-        
-        # Ouvrir l'image téléchargée avec PIL
-        result_image = Image.open(BytesIO(image_response.content))
-        
-        return result_image
+        # Utiliser aiohttp pour les requêtes asynchrones
+        async with aiohttp.ClientSession(timeout=BRIA_API_TIMEOUT) as session:
+            data = aiohttp.FormData()
+            data.add_field('file', 
+                          temp_file.getvalue(), 
+                          filename='image.png', 
+                          content_type='image/png')
+            
+            if content_moderation:
+                data.add_field('content_moderation', 'true')
+            
+            async with session.post(url, headers=headers, data=data) as response:
+                if response.status != 200:
+                    error_text = await response.text()
+                    logger.error(f"Erreur API Bria: {response.status} - {error_text}")
+                    raise Exception(f"Erreur API Bria: {response.status} - {error_text}")
+                
+                result_data = await response.json()
+                result_url = result_data.get('result_url')
+                
+                if not result_url:
+                    raise Exception("Aucune URL de résultat retournée par Bria API")
+                
+                logger.info(f"Image traitée avec succès par Bria.ai, URL résultante: {result_url}")
+                
+                # Télécharger l'image résultante
+                async with session.get(result_url) as image_response:
+                    if image_response.status != 200:
+                        raise Exception(f"Erreur lors du téléchargement de l'image résultante: {image_response.status}")
+                    
+                    image_data = await image_response.read()
+                    result_image = await run_in_thread(lambda: Image.open(BytesIO(image_data)))
+                    
+                    return result_image
+                    
     except Exception as e:
         logger.error(f"Erreur lors du traitement avec Bria.ai: {str(e)}")
         raise
 
 @app.route('/remove-background', methods=['POST', 'OPTIONS'])
-def remove_background_api():
+async def remove_background_api():
     # Gérer les requêtes OPTIONS (pre-flight) pour CORS
     if request.method == 'OPTIONS':
         return '', 200
@@ -124,11 +177,12 @@ def remove_background_api():
     content_moderation = request.args.get('content_moderation', 'false').lower() in ('true', '1', 't', 'y', 'yes')
     
     # Vérifier si une image a été envoyée
-    if 'image' not in request.files:
+    if 'image' not in (await request.files):
         logger.error("Aucune image n'a été envoyée")
         return jsonify({'error': 'Aucune image n\'a été envoyée'}), 400
     
-    file = request.files['image']
+    files = await request.files
+    file = files['image']
     logger.info(f"Fichier reçu: {file.filename}")
     
     # Vérifier si le fichier est valide
@@ -141,26 +195,22 @@ def remove_background_api():
         return jsonify({'error': f'Format de fichier non supporté. Formats acceptés: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
     
     try:
-        # Générer un nom de fichier unique
+        # Générer un nom de fichier unique pour les logs et les références
         filename = secure_filename(file.filename)
         unique_filename = f"{uuid.uuid4()}_{filename}"
         input_path = os.path.join(UPLOAD_FOLDER, unique_filename)
         
-        logger.info(f"Sauvegarde de l'image vers: {input_path}")
-        # Sauvegarder l'image
-        file.save(input_path)
-        
-        logger.info(f"Vérification que le fichier existe: {os.path.exists(input_path)}")
-        if not os.path.exists(input_path):
-            raise Exception(f"Le fichier n'a pas été sauvegardé correctement à {input_path}")
-        
-        # Ouvrir l'image
-        input_image = Image.open(input_path)
+        # Lire directement le fichier en mémoire
+        file_data = await file.read()
+        input_image = await run_in_thread(lambda: Image.open(BytesIO(file_data)))
         logger.info(f"Image ouverte, taille: {input_image.size}, mode: {input_image.mode}")
+        
+        # Optimiser l'image avant envoi
+        input_image = await optimize_image_for_processing(input_image)
         
         # Traiter l'image avec Bria.ai
         logger.info("Début du traitement avec Bria.ai")
-        output_image = process_with_bria(input_image, content_moderation)
+        output_image = await process_with_bria(input_image, content_moderation)
         
         logger.info(f"Traitement terminé avec succès, mode de l'image résultante: {output_image.mode}")
         
@@ -171,9 +221,9 @@ def remove_background_api():
         # Assurez-vous que l'image est en mode RGBA pour la transparence
         if output_image.mode != 'RGBA':
             logger.info(f"Conversion de l'image du mode {output_image.mode} vers RGBA")
-            output_image = output_image.convert('RGBA')
+            output_image = await run_in_thread(lambda: output_image.convert('RGBA'))
             
-        output_image.save(img_io, format='PNG')
+        await run_in_thread(lambda: output_image.save(img_io, format='PNG'))
         img_io.seek(0)
         
         # Afficher les informations sur la taille de l'image
@@ -182,7 +232,7 @@ def remove_background_api():
         
         # Envoyer l'image avec le bon type MIME
         logger.info("Envoi du fichier PNG au client")
-        response = send_file(
+        response = await send_file(
             img_io, 
             mimetype='image/png',
             download_name='image_sans_fond.png',
@@ -205,16 +255,14 @@ def remove_background_api():
         return jsonify({'error': f'Erreur pendant le traitement: {str(e)}', 'details': error_details}), 500
     
     finally:
-        # Nettoyer les fichiers temporaires
-        if 'input_path' in locals() and os.path.exists(input_path):
-            try:
-                os.remove(input_path)
-                logger.info(f"Fichier d'entrée supprimé: {input_path}")
-            except Exception as e:
-                logger.warning(f"Impossible de supprimer le fichier d'entrée: {str(e)}")
+        # Nettoyer les ressources
+        if 'input_image' in locals():
+            await run_in_thread(lambda: input_image.close())
+        if 'output_image' in locals():
+            await run_in_thread(lambda: output_image.close())
 
 @app.route('/health', methods=['GET', 'OPTIONS'])
-def health_check():
+async def health_check():
     # Gérer les requêtes OPTIONS (pre-flight) pour CORS
     if request.method == 'OPTIONS':
         return '', 200
@@ -230,4 +278,14 @@ def health_check():
     })
 
 if __name__ == '__main__':
-    app.run(host='0.0.0.0', port=5000)
+    # En développement, vous pouvez utiliser le serveur intégré de Quart
+    # app.run(host='0.0.0.0', port=5000)
+    
+    # Pour la production avec Hypercorn via python directement
+    import hypercorn.asyncio
+    hypercorn.asyncio.run(app, {
+        'bind': ['0.0.0.0:5000'],
+        'workers': 4,
+        'worker_class': 'uvloop',
+        'keepalive': 65,
+    })
