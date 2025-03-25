@@ -2,28 +2,13 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-# Installer les dépendances système nécessaires pour Pillow, XnConvert et autres
+# Installer les dépendances système nécessaires pour Pillow et autres
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libjpeg-dev \
     zlib1g-dev \
-    wget \
-    ca-certificates \
-    gnupg \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-# Installer XnConvert
-RUN mkdir -p /etc/apt/keyrings \
-    && wget -O- https://dl.xnview.com/keys/xnview-key.asc | gpg --dearmor -o /etc/apt/keyrings/xnview.gpg \
-    && echo "deb [signed-by=/etc/apt/keyrings/xnview.gpg] https://dl.xnview.com/apt all main" > /etc/apt/sources.list.d/xnview.list \
-    && apt-get update \
-    && apt-get install -y --no-install-recommends xnconvert \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
-
-# Configurer le chemin vers XnConvert
-ENV XNCONVERT_PATH=/usr/bin/xnconvert
 
 # Copier les fichiers de dépendances
 COPY requirements.txt .
@@ -34,8 +19,8 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copier le code de l'application
 COPY app.py .
 
-# Créer les dossiers pour les uploads, les résultats et les fichiers temporaires
-RUN mkdir -p uploads results logs xnconvert_temp
+# Créer les dossiers pour les uploads et les résultats
+RUN mkdir -p uploads results logs
 
 # Exposer le port
 EXPOSE 5000
