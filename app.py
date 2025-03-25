@@ -191,13 +191,77 @@ def process_with_xnconvert(input_image, operations):
                 if len(parts) >= 2:
                     width, height = parts[0], parts[1]
                     mode = parts[2] if len(parts) > 2 else "1"  # Mode 1 (garder ratio) par défaut
+                    
+                    # Pour mode "Ajuster" de XnConvert
                     cmd.extend(["-resize", width, height, mode])
+                    
+                    # Paramètres supplémentaires
+                    if len(parts) > 3 and parts[3] == "always":
+                        cmd.extend(["-resizemajor", "a"])
+                    else:
+                        cmd.extend(["-resizemajor", "d"])  # d = downscale only (default)
+                    
+                    # Méthode de ré-échantillonnage
+                    if len(parts) > 4:
+                        resampling = parts[4].lower()
+                        if resampling == "hanning":
+                            cmd.extend(["-resample", "hanning"])
+                        elif resampling == "lanczos":
+                            cmd.extend(["-resample", "lanczos"])
+                        elif resampling == "bicubic":
+                            cmd.extend(["-resample", "bicubic"])
+                        elif resampling == "bilinear":
+                            cmd.extend(["-resample", "bilinear"])
+                        elif resampling == "nearest":
+                            cmd.extend(["-resample", "nearest"])
+                    
             elif op_name == "crop":
-                # Format attendu: x,y,width,height
+                # Format attendu: x,y,width,height,bgcolor
                 parts = op_value.split(",")
-                if len(parts) == 4:
-                    x, y, width, height = parts
+                
+                if len(parts) >= 4:
+                    x, y, width, height = parts[0:4]
                     cmd.extend(["-crop", x, y, width, height])
+                    
+                    # Si un fond est spécifié (r,g,b,a)
+                    if len(parts) > 4:
+                        bgcolor = parts[4]
+                        cmd.extend(["-canvas_color", bgcolor])
+                        
+                    # Position (haut-gauche, centre, etc.)
+                    if len(parts) > 5:
+                        position = parts[5]
+                        if position == "top-left":
+                            cmd.extend(["-position", "tl"])
+                        elif position == "top-center":
+                            cmd.extend(["-position", "tc"])
+                        elif position == "top-right":
+                            cmd.extend(["-position", "tr"])
+                        elif position == "center-left":
+                            cmd.extend(["-position", "cl"])
+                        elif position == "center":
+                            cmd.extend(["-position", "cc"])
+                        elif position == "center-right":
+                            cmd.extend(["-position", "cr"])
+                        elif position == "bottom-left":
+                            cmd.extend(["-position", "bl"])
+                        elif position == "bottom-center":
+                            cmd.extend(["-position", "bc"])
+                        elif position == "bottom-right":
+                            cmd.extend(["-position", "br"])
+                
+            elif op_name == "bgcolor":
+                # Format attendu: r,g,b,a (valeurs 0-255)
+                cmd.extend(["-canvas_color", op_value])
+                
+            elif op_name == "resample":
+                # Méthode de ré-échantillonnage
+                cmd.extend(["-resample", op_value])
+                
+            elif op_name == "always":
+                if op_value.lower() in ('yes', 'true', '1', 'y'):
+                    cmd.extend(["-resizemajor", "a"])
+                
             else:
                 # Autres opérations génériques
                 cmd.extend(["-" + op_name, op_value])
@@ -604,7 +668,7 @@ def resize_crop_api():
             
         img_io.seek(0)
         img_size = img_io.getbuffer().nbytes
-        
+
         # Envoyer l'image traitée
         logger.info(f"Envoi de l'image traitée ({img_size} octets)")
         response = send_file(
@@ -628,6 +692,156 @@ def resize_crop_api():
         logger.error(f"ERREUR: {str(e)}")
         logger.error(f"DÉTAILS: {error_details}")
         return jsonify({'error': f'Erreur pendant le traitement: {str(e)}'}), 500
+    
+    finally:
+        # Nettoyer les ressources
+        if 'input_image' in locals():
+            input_image.close()
+        if 'output_image' in locals():
+            output_image.close()
+
+@app.route('/xnresize', methods=['POST', 'OPTIONS'])
+def xnresize_api():
+    """
+    Endpoint pour redimensionner et recadrer une image avec les mêmes paramètres que XnConvert GUI.
+    """
+    # Gérer les requêtes OPTIONS (pre-flight) pour CORS
+    if request.method == 'OPTIONS':
+        return '', 200
+        
+    logger.info("Requête reçue sur /xnresize")
+    
+    # Vérifier si une image a été envoyée
+    if 'image' not in request.files:
+        logger.error("Aucune image n'a été envoyée")
+        return jsonify({'error': 'Aucune image n\'a été envoyée'}), 400
+    
+    file = request.files['image']
+    logger.info(f"Fichier reçu: {file.filename}")
+    
+    # Vérifier si le fichier est valide
+    if file.filename == '':
+        logger.error("Nom de fichier vide")
+        return jsonify({'error': 'Nom de fichier vide'}), 400
+    
+    if not allowed_file(file.filename):
+        logger.error(f"Format de fichier non supporté: {file.filename}")
+        return jsonify({'error': f'Format de fichier non supporté. Formats acceptés: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
+    
+    try:
+        # Paramètres pour simuler exactement l'interface XnConvert
+        
+        # Paramètres de redimensionnement
+        resize_width = request.form.get('resize_width', '1000')
+        resize_height = request.form.get('resize_height', '1500')
+        keep_ratio = request.form.get('keep_ratio', 'true').lower() in ('true', '1', 't', 'y', 'yes')
+        resize_mode = request.form.get('resize_mode', 'fit')  # fit, stretch, or fill
+        resize_always = request.form.get('resize_always', 'true').lower() in ('true', '1', 't', 'y', 'yes')
+        resampling = request.form.get('resampling', 'hanning')  # hanning, lanczos, bicubic, bilinear, nearest
+        
+        # Paramètres de recadrage
+        crop_width = request.form.get('crop_width', '1000')
+        crop_height = request.form.get('crop_height', '1500')
+        crop_mode = request.form.get('crop_mode', 'normal')  # normal, relative
+        crop_keep_ratio = request.form.get('crop_keep_ratio', 'true').lower() in ('true', '1', 't', 'y', 'yes')
+        bg_color = request.form.get('bg_color', '255,255,255,255')  # r,g,b,a format
+        crop_position = request.form.get('crop_position', 'top-left')  # top-left, center, etc.
+        
+        # Paramètres de sortie
+        output_format = request.form.get('output_format', 'jpg').upper()
+        quality = int(request.form.get('quality', 90))
+        
+        # Préparer les opérations
+        operations = []
+        
+        # Paramètre de redimensionnement
+        resize_mode_num = '1'  # Par défaut: conserver le ratio
+        if resize_mode == 'stretch':
+            resize_mode_num = '0'  # Ignorer le ratio (étirer)
+        elif resize_mode == 'fill':
+            resize_mode_num = '2'  # Compléter avec transparence
+            
+        if not keep_ratio:
+            resize_mode_num = '0'  # Ignorer le ratio si keep_ratio est désactivé
+            
+        resize_params = f"{resize_width},{resize_height},{resize_mode_num}"
+        if resize_always:
+            resize_params += ",always"
+        resize_params += f",{resampling}"
+        operations.append(("resize", resize_params))
+        
+        # Paramètre de recadrage
+        crop_params = f"0,0,{crop_width},{crop_height},{bg_color},{crop_position}"
+        operations.append(("crop", crop_params))
+        
+        # Lire le fichier en mémoire
+        file_data = file.read()
+        input_image = Image.open(BytesIO(file_data))
+        logger.info(f"Image ouverte, taille: {input_image.size}, mode: {input_image.mode}")
+        
+        # Traiter l'image avec XnConvert
+        logger.info("Début du traitement avec XnConvert")
+        
+        # Utiliser le pool de threads pour le traitement
+        future = thread_pool.submit(process_with_xnconvert, input_image, operations)
+        output_image = future.result()
+        
+        logger.info(f"Traitement terminé avec succès, mode de l'image résultante: {output_image.mode}")
+        
+        # Envoyer directement l'image via BytesIO
+        logger.info("Préparation de l'image pour l'envoi")
+        img_io = BytesIO()
+        
+        # JPG ne supporte pas la transparence, donc convertir en RGB si nécessaire
+        if output_format in ['JPEG', 'JPG'] and output_image.mode == 'RGBA':
+            # Créer un fond blanc
+            background = Image.new('RGB', output_image.size, (255, 255, 255))
+            background.paste(output_image, mask=output_image.split()[3])  # 3 est le canal alpha
+            output_image = background
+        
+        # Sauvegarder dans le format approprié
+        if output_format in ['JPEG', 'JPG']:
+            output_image.save(img_io, format='JPEG', quality=quality)
+            mimetype = 'image/jpeg'
+            filename = 'image_processed.jpg'
+        elif output_format == 'WEBP':
+            output_image.save(img_io, format='WEBP', quality=quality)
+            mimetype = 'image/webp'
+            filename = 'image_processed.webp'
+        else:  # PNG par défaut
+            output_image.save(img_io, format='PNG')
+            mimetype = 'image/png'
+            filename = 'image_processed.png'
+            
+        img_io.seek(0)
+        
+        # Afficher les informations sur la taille de l'image
+        img_size = img_io.getbuffer().nbytes
+        logger.info(f"Taille de l'image à envoyer: {img_size} octets")
+        
+        # Envoyer l'image avec le bon type MIME
+        logger.info(f"Envoi du fichier {output_format} au client")
+        response = send_file(
+            img_io, 
+            mimetype=mimetype,
+            download_name=filename,
+            as_attachment=True  # Force le téléchargement plutôt que l'affichage
+        )
+        
+        # Ajouter des en-têtes pour éviter la mise en cache
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers["Content-Length"] = str(img_size)
+        
+        return response
+    
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"ERREUR: {str(e)}")
+        logger.error(f"DÉTAILS: {error_details}")
+        return jsonify({'error': f'Erreur pendant le traitement: {str(e)}', 'details': error_details}), 500
     
     finally:
         # Nettoyer les ressources
