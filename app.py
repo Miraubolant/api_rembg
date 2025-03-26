@@ -79,19 +79,6 @@ def restrict_access_by_ip():
 def resize_with_nconvert(input_path, output_path, width=None, height=None, crop_position='center', bg_color=(255, 255, 255), output_format='jpeg', quality=80):
     """
     Redimensionne et recadre une image à l'aide de nconvert.
-    
-    Args:
-        input_path (str): Chemin de l'image d'entrée
-        output_path (str): Chemin de l'image de sortie
-        width (int, optional): Largeur souhaitée
-        height (int, optional): Hauteur souhaitée
-        crop_position (str): Position de recadrage ('center', 'top_left', etc.)
-        bg_color (tuple): Couleur de fond (r, g, b)
-        output_format (str): Format de sortie ('jpeg' ou 'png')
-        quality (int): Qualité de compression pour le JPEG (0-100)
-    
-    Returns:
-        bool: True si succès, False sinon
     """
     try:
         # Convertir la position de recadrage au format nconvert
@@ -109,50 +96,96 @@ def resize_with_nconvert(input_path, output_path, width=None, height=None, crop_
         
         position = nconvert_positions.get(crop_position, 'center')
         
-        # Préparer la commande nconvert
-        cmd = ['nconvert', '-ratio', '-rtype', 'hanning']
+        # Créer un dossier temporaire pour stocker le résultat intermédiaire
+        output_dir = os.path.dirname(output_path)
+        temp_output = os.path.join(output_dir, f"temp_{os.path.basename(output_path)}")
+        
+        # Préparer la commande nconvert - avec un seul fichier spécifié
+        cmd = ['nconvert']
+        
+        # Options de redimensionnement
+        cmd.append('-ratio')
+        cmd.append('-rtype')
+        cmd.append('hanning')
         
         # Ajouter les paramètres de redimensionnement
         if width is not None and height is not None:
-            cmd.extend(['-resize', str(width), str(height)])
-            cmd.extend(['-canvas', str(width), str(height), position])
+            cmd.append('-resize')
+            cmd.append(str(width))
+            cmd.append(str(height))
+            cmd.append('-canvas')
+            cmd.append(str(width))
+            cmd.append(str(height))
+            cmd.append(position)
         elif width is not None:
-            cmd.extend(['-resize', str(width), '0'])
+            cmd.append('-resize')
+            cmd.append(str(width))
+            cmd.append('0')
         elif height is not None:
-            cmd.extend(['-resize', '0', str(height)])
+            cmd.append('-resize')
+            cmd.append('0')
+            cmd.append(str(height))
         
         # Ajouter la couleur de fond
-        cmd.extend(['-bgcolor', str(bg_color[0]), str(bg_color[1]), str(bg_color[2])])
+        cmd.append('-bgcolor')
+        cmd.append(str(bg_color[0]))
+        cmd.append(str(bg_color[1]))
+        cmd.append(str(bg_color[2]))
         
         # Configurer le format de sortie
-        cmd.extend(['-out', output_format])
+        cmd.append('-out')
+        cmd.append(output_format)
         
         # Ajouter la qualité pour JPEG
         if output_format.lower() == 'jpeg':
-            cmd.extend(['-q', str(quality)])
+            cmd.append('-q')
+            cmd.append(str(quality))
         
-        # Corriger la syntaxe pour le fichier de sortie - nconvert utilise -o [chemin]
+        # Ajouter le fichier d'entrée
         cmd.append(input_path)
+        
+        # Utiliser -o pour spécifier le fichier de sortie comme argument séparé
         cmd.append('-o')
-        cmd.append(output_path)
+        cmd.append(temp_output)
         
         # Exécuter la commande
         logger.info(f"Exécution de la commande nconvert: {' '.join(cmd)}")
-        process = subprocess.run(cmd, capture_output=True, text=True)
         
-        # Vérifier si la commande a fonctionné en vérifiant si le fichier de sortie existe
-        if os.path.exists(output_path):
+        # Utiliser l'environnement actuel mais sans arguments supplémentaires
+        process = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
+        
+        # Vérifier si le fichier temporaire existe
+        if os.path.exists(temp_output):
+            # Renommer le fichier temporaire en nom final
+            os.rename(temp_output, output_path)
             logger.info(f"Redimensionnement avec nconvert réussi: {output_path}")
             return True
         else:
+            # Vérifier si nconvert a créé un fichier avec un autre nom
+            # (souvent, il ajoute une extension par défaut)
+            potential_outputs = [
+                f"{input_path}.jpg",
+                f"{input_path}.jpeg",
+                f"{input_path}.png",
+                os.path.splitext(input_path)[0] + '.jpg',
+                os.path.splitext(input_path)[0] + '.jpeg',
+                os.path.splitext(input_path)[0] + '.png'
+            ]
+            
+            for pot_file in potential_outputs:
+                if os.path.exists(pot_file):
+                    logger.info(f"Fichier trouvé à un emplacement différent: {pot_file}")
+                    os.rename(pot_file, output_path)
+                    logger.info(f"Fichier renommé en: {output_path}")
+                    return True
+            
             logger.error(f"Erreur lors du redimensionnement avec nconvert: {process.stderr}")
             return False
             
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Erreur lors de l'exécution de nconvert: {e.stderr}")
-        return False
     except Exception as e:
         logger.error(f"Erreur lors du redimensionnement avec nconvert: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return False
 
 def process_with_bria(input_image, content_moderation=False):
