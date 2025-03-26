@@ -8,6 +8,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg-dev \
     zlib1g-dev \
     wget \
+    libgl1-mesa-glx \
     && wget https://download.xnview.com/XnConvert-linux-x64.deb \
     && apt install -y ./XnConvert-linux-x64.deb \
     && rm XnConvert-linux-x64.deb \
