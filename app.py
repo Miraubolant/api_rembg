@@ -76,9 +76,22 @@ def restrict_access_by_ip():
         logger.warning(f"Tentative d'accès non autorisée depuis l'IP: {client_ip}")
         return jsonify({'error': 'Accès non autorisé'}), 403
 
-def resize_with_xnconvert(input_path, output_path, width=None, height=None, crop_position='center', bg_color=(255, 255, 255), output_format='jpeg', quality=80):
+def resize_with_pillow(input_path, output_path, width=None, height=None, crop_position='center', bg_color=(255, 255, 255), output_format='jpeg', quality=80):
     """
-    Redimensionne et recadre une image avec PIL/Pillow mais simule le comportement de XnConvert.
+    Redimensionne et recadre une image à l'aide de Pillow.
+    
+    Args:
+        input_path (str): Chemin de l'image d'entrée
+        output_path (str): Chemin de l'image de sortie
+        width (int, optional): Largeur souhaitée
+        height (int, optional): Hauteur souhaitée
+        crop_position (str): Position de recadrage ('center', 'top_left', etc.)
+        bg_color (tuple): Couleur de fond (r, g, b)
+        output_format (str): Format de sortie ('jpeg' ou 'png')
+        quality (int): Qualité de compression pour le JPEG (0-100)
+    
+    Returns:
+        bool: True si succès, False sinon
     """
     try:
         # Ouvrir l'image d'entrée
@@ -90,7 +103,7 @@ def resize_with_xnconvert(input_path, output_path, width=None, height=None, crop
         target_width = width if width is not None else original_width
         target_height = height if height is not None else original_height
         
-        # Redimensionner avec conservation du ratio (équivalent à -ratio dans XnConvert)
+        # Redimensionner avec conservation du ratio (équivalent à -ratio dans nconvert)
         if width is not None and height is not None:
             # Calculer le ratio pour conserver les proportions
             width_ratio = target_width / original_width
@@ -161,11 +174,9 @@ def resize_with_xnconvert(input_path, output_path, width=None, height=None, crop
             img.save(output_path, format='PNG')
             logger.info(f"Image sauvegardée en PNG: {output_path}")
         
-        # Simuler le message de log de XnConvert pour maintenir la cohérence
-        logger.info(f"Redimensionnement simulé de XnConvert réussi: {output_path}")
         return True
     except Exception as e:
-        logger.error(f"Erreur lors du redimensionnement avec Pillow/XnConvert: {str(e)}")
+        logger.error(f"Erreur lors du redimensionnement avec Pillow: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
         return False
@@ -312,24 +323,24 @@ def remove_background_api():
         temp_bria_output = os.path.join(OUTPUT_FOLDER, f"{unique_id}_bria.png")
         output_image.save(temp_bria_output, format='PNG')
         
-        # Déterminer le format approprié pour XnConvert
-        xnconvert_format = 'jpeg' if output_format == 'jpg' else 'png'
+        # Déterminer le format approprié pour Pillow
+        pillow_format = 'jpeg' if output_format == 'jpg' else 'png'
         
-        # Redimensionner et recadrer avec XnConvert
+        # Redimensionner et recadrer avec Pillow
         bg_color = DEFAULT_BG_COLOR
-        resize_success = resize_with_xnconvert(
+        resize_success = resize_with_pillow(
             temp_bria_output, 
             temp_output_path,
             width=width,
             height=height,
             crop_position=crop_position,
             bg_color=bg_color,
-            output_format=xnconvert_format,
+            output_format=pillow_format,
             quality=80
         )
         
         if not resize_success:
-            raise Exception("Échec du redimensionnement avec XnConvert")
+            raise Exception("Échec du redimensionnement avec Pillow")
         
         # Vérifier que le fichier existe
         if not os.path.exists(temp_output_path):
@@ -410,7 +421,7 @@ def health_check():
             'authorized_ips': AUTHORIZED_IPS
         },
         'image_processing': {
-            'resize_method': 'xnconvert',
+            'resize_method': 'pillow',
             'output_formats': ['jpg', 'png'],
             'features': ['background_removal', 'resize', 'crop'],
             'crop_positions': VALID_CROP_POSITIONS,
