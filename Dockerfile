@@ -15,9 +15,11 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Télécharger et installer XnView/nconvert
 RUN wget https://download.xnview.com/NConvert-linux64.tgz && \
-    tar -xzf NConvert-linux64.tgz -C /usr/local/bin && \
+    mkdir -p /tmp/nconvert && \
+    tar -xzf NConvert-linux64.tgz -C /tmp/nconvert && \
+    find /tmp/nconvert -name "nconvert" -type f -exec cp {} /usr/local/bin/ \; && \
     chmod +x /usr/local/bin/nconvert && \
-    rm NConvert-linux64.tgz
+    rm -rf /tmp/nconvert NConvert-linux64.tgz
 
 # Copier les fichiers de dépendances
 COPY requirements.txt .
