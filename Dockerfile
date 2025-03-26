@@ -2,19 +2,13 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-# Installer les dépendances système nécessaires pour Pillow et ImageMagick
+# Installer les dépendances système nécessaires pour Pillow et autres
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libjpeg-dev \
     zlib1g-dev \
-    imagemagick \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
-
-# Configurer ImageMagick pour permettre les conversions PNG/JPEG
-RUN mkdir -p /etc/ImageMagick-6 && \
-    echo '<policy domain="coder" rights="read|write" pattern="PNG" />' > /etc/ImageMagick-6/policy.xml && \
-    echo '<policy domain="coder" rights="read|write" pattern="JPEG" />' >> /etc/ImageMagick-6/policy.xml
 
 # Copier les fichiers de dépendances
 COPY requirements.txt .
