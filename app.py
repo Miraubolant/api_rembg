@@ -33,6 +33,11 @@ UPLOAD_FOLDER = 'uploads'
 OUTPUT_FOLDER = 'results'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 
+# Valeurs par défaut pour le redimensionnement
+DEFAULT_MAX_SIZE = 5000
+MIN_SIZE = 100
+MAX_SIZE = 10000
+
 # Créer les dossiers s'ils n'existent pas
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -70,15 +75,55 @@ def restrict_access_by_ip():
         logger.warning(f"Tentative d'accès non autorisée depuis l'IP: {client_ip}")
         return jsonify({'error': 'Accès non autorisé'}), 403
 
-def optimize_image_for_processing(image, max_size=5000):
+def optimize_image_for_processing(image, max_width=None, max_height=None, max_size=DEFAULT_MAX_SIZE):
     """
-    Optimise l'image avant traitement :
-    1. Redimensionne si trop grande
-    2. Compresse
+    Optimise l'image avant traitement avec options de redimensionnement personnalisables.
+    
+    Args:
+        image (PIL.Image): L'image à optimiser
+        max_width (int, optional): Largeur maximale spécifique
+        max_height (int, optional): Hauteur maximale spécifique
+        max_size (int, optional): Taille maximale (largeur ou hauteur) si max_width et max_height ne sont pas spécifiés
+    
+    Returns:
+        PIL.Image: L'image optimisée
     """
-    # Redimensionner si nécessaire
     width, height = image.size
-    if width > max_size or height > max_size:
+    
+    # Vérifier si des dimensions spécifiques ont été demandées
+    if max_width is not None or max_height is not None:
+        # Si une seule dimension est spécifiée, calculer l'autre en gardant le ratio
+        if max_width is not None and max_height is None:
+            # Limiter max_width à une valeur raisonnable
+            max_width = min(max(int(max_width), MIN_SIZE), MAX_SIZE)
+            ratio = max_width / width
+            new_width = max_width
+            new_height = int(height * ratio)
+            logger.info(f"Redimensionnement avec largeur spécifique: {new_width}x{new_height}")
+        
+        elif max_height is not None and max_width is None:
+            # Limiter max_height à une valeur raisonnable
+            max_height = min(max(int(max_height), MIN_SIZE), MAX_SIZE)
+            ratio = max_height / height
+            new_height = max_height
+            new_width = int(width * ratio)
+            logger.info(f"Redimensionnement avec hauteur spécifique: {new_width}x{new_height}")
+        
+        else:
+            # Les deux dimensions sont spécifiées
+            max_width = min(max(int(max_width), MIN_SIZE), MAX_SIZE)
+            max_height = min(max(int(max_height), MIN_SIZE), MAX_SIZE)
+            new_width = max_width
+            new_height = max_height
+            logger.info(f"Redimensionnement avec dimensions spécifiques: {new_width}x{new_height}")
+        
+        image = image.resize((new_width, new_height), Image.LANCZOS)
+    
+    # Sinon, utiliser la logique de redimensionnement par défaut basée sur max_size
+    elif width > max_size or height > max_size:
+        # Limiter max_size à une valeur raisonnable
+        max_size = min(max(int(max_size), MIN_SIZE), MAX_SIZE)
+        
         # Garder le ratio
         if width > height:
             new_width = max_size
@@ -88,7 +133,7 @@ def optimize_image_for_processing(image, max_size=5000):
             new_width = int(width * (max_size / height))
         
         image = image.resize((new_width, new_height), Image.LANCZOS)
-        logger.info(f"Image redimensionnée à {new_width}x{new_height}")
+        logger.info(f"Redimensionnement automatique à {new_width}x{new_height}")
     
     return image
 
@@ -156,8 +201,36 @@ def remove_background_api():
         
     logger.info("Requête reçue sur /remove-background")
     
-    # Récupérer le paramètre de modération de contenu
+    # Récupérer les paramètres de redimensionnement et de modération
+    max_width = request.args.get('max_width')
+    max_height = request.args.get('max_height')
+    max_size = request.args.get('max_size', DEFAULT_MAX_SIZE)
     content_moderation = request.args.get('content_moderation', 'false').lower() in ('true', '1', 't', 'y', 'yes')
+    
+    # Convertir les paramètres en entiers si présents
+    if max_width:
+        try:
+            max_width = int(max_width)
+            logger.info(f"Largeur maximale demandée: {max_width}")
+        except ValueError:
+            logger.warning(f"Valeur invalide pour max_width: {max_width}")
+            return jsonify({'error': 'La valeur de max_width doit être un nombre entier'}), 400
+    
+    if max_height:
+        try:
+            max_height = int(max_height)
+            logger.info(f"Hauteur maximale demandée: {max_height}")
+        except ValueError:
+            logger.warning(f"Valeur invalide pour max_height: {max_height}")
+            return jsonify({'error': 'La valeur de max_height doit être un nombre entier'}), 400
+    
+    if max_size:
+        try:
+            max_size = int(max_size)
+            logger.info(f"Taille maximale demandée: {max_size}")
+        except ValueError:
+            logger.warning(f"Valeur invalide pour max_size: {max_size}")
+            return jsonify({'error': 'La valeur de max_size doit être un nombre entier'}), 400
     
     # Vérifier si une image a été envoyée
     if 'image' not in request.files:
@@ -182,8 +255,13 @@ def remove_background_api():
         input_image = Image.open(BytesIO(file_data))
         logger.info(f"Image ouverte, taille: {input_image.size}, mode: {input_image.mode}")
         
-        # Optimiser l'image avant envoi
-        input_image = optimize_image_for_processing(input_image)
+        # Optimiser l'image avant envoi avec les paramètres spécifiés
+        input_image = optimize_image_for_processing(
+            input_image, 
+            max_width=max_width, 
+            max_height=max_height, 
+            max_size=max_size
+        )
         
         # Traiter l'image avec Bria.ai
         logger.info("Début du traitement avec Bria.ai")
@@ -254,6 +332,11 @@ def health_check():
             'ip_restriction': True,
             'allowed_origins': ALLOWED_ORIGINS,
             'authorized_ips': AUTHORIZED_IPS
+        },
+        'image_processing': {
+            'default_max_size': DEFAULT_MAX_SIZE,
+            'min_size_allowed': MIN_SIZE,
+            'max_size_allowed': MAX_SIZE
         }
     })
 
