@@ -76,13 +76,26 @@ def restrict_access_by_ip():
         logger.warning(f"Tentative d'accès non autorisée depuis l'IP: {client_ip}")
         return jsonify({'error': 'Accès non autorisé'}), 403
 
-def resize_with_nconvert(input_path, output_path, width=None, height=None, crop_position='center', bg_color=(255, 255, 255), output_format='jpeg', quality=80):
+def resize_with_xnconvert(input_path, output_path, width=None, height=None, crop_position='center', bg_color=(255, 255, 255), output_format='jpeg', quality=80):
     """
-    Redimensionne et recadre une image à l'aide de nconvert.
+    Redimensionne et recadre une image à l'aide de XnConvert.
+    
+    Args:
+        input_path (str): Chemin de l'image d'entrée
+        output_path (str): Chemin de l'image de sortie
+        width (int, optional): Largeur souhaitée
+        height (int, optional): Hauteur souhaitée
+        crop_position (str): Position de recadrage ('center', 'top_left', etc.)
+        bg_color (tuple): Couleur de fond (r, g, b)
+        output_format (str): Format de sortie ('jpeg' ou 'png')
+        quality (int): Qualité de compression pour le JPEG (0-100)
+    
+    Returns:
+        bool: True si succès, False sinon
     """
     try:
-        # Convertir la position de recadrage au format nconvert
-        nconvert_positions = {
+        # Convertir la position de recadrage au format XnConvert
+        xnconvert_positions = {
             'center': 'center',
             'top_left': 'top_left', 
             'top': 'top_center',
@@ -94,96 +107,61 @@ def resize_with_nconvert(input_path, output_path, width=None, height=None, crop_
             'bottom_right': 'bottom_right'
         }
         
-        position = nconvert_positions.get(crop_position, 'center')
+        position = xnconvert_positions.get(crop_position, 'center')
         
-        # Créer un dossier temporaire pour stocker le résultat intermédiaire
-        output_dir = os.path.dirname(output_path)
-        temp_output = os.path.join(output_dir, f"temp_{os.path.basename(output_path)}")
+        # Construire les actions à effectuer
+        actions = []
         
-        # Préparer la commande nconvert - avec un seul fichier spécifié
-        cmd = ['nconvert']
-        
-        # Options de redimensionnement
-        cmd.append('-ratio')
-        cmd.append('-rtype')
-        cmd.append('hanning')
-        
-        # Ajouter les paramètres de redimensionnement
+        # Action de redimensionnement
         if width is not None and height is not None:
-            cmd.append('-resize')
-            cmd.append(str(width))
-            cmd.append(str(height))
-            cmd.append('-canvas')
-            cmd.append(str(width))
-            cmd.append(str(height))
-            cmd.append(position)
+            # Redimensionner avec conservation du ratio
+            actions.append(f"-resize 2 1 {width} {height}")
+            # Ajouter un canevas avec position
+            actions.append(f"-canvas {width} {height} {position} {bg_color[0]} {bg_color[1]} {bg_color[2]}")
         elif width is not None:
-            cmd.append('-resize')
-            cmd.append(str(width))
-            cmd.append('0')
+            actions.append(f"-resize 2 1 {width} 0")
         elif height is not None:
-            cmd.append('-resize')
-            cmd.append('0')
-            cmd.append(str(height))
+            actions.append(f"-resize 2 1 0 {height}")
         
-        # Ajouter la couleur de fond
-        cmd.append('-bgcolor')
-        cmd.append(str(bg_color[0]))
-        cmd.append(str(bg_color[1]))
-        cmd.append(str(bg_color[2]))
+        # Commande XnConvert
+        cmd = ['xvfb-run', 'xnconvert', '-quiet']
         
-        # Configurer le format de sortie
-        cmd.append('-out')
-        cmd.append(output_format)
-        
-        # Ajouter la qualité pour JPEG
-        if output_format.lower() == 'jpeg':
-            cmd.append('-q')
-            cmd.append(str(quality))
+        # Ajouter chaque action
+        for action in actions:
+            cmd.extend(['-actions', action])
         
         # Ajouter le fichier d'entrée
-        cmd.append(input_path)
+        cmd.extend(['-input', input_path])
         
-        # Utiliser -o pour spécifier le fichier de sortie comme argument séparé
-        cmd.append('-o')
-        cmd.append(temp_output)
+        # Configurer la sortie
+        cmd.extend(['-output', os.path.dirname(output_path)])
+        
+        # Configurer le format de sortie
+        out_format = 'jpeg' if output_format == 'jpg' else output_format
+        cmd.extend(['-outputformat', out_format])
+        
+        # Configurer la qualité pour JPEG
+        if output_format.lower() == 'jpg' or output_format.lower() == 'jpeg':
+            cmd.extend(['-outputoptions', f"Quality={quality}"])
+        
+        # Configurer le nom du fichier de sortie
+        output_filename = os.path.basename(output_path)
+        cmd.extend(['-outputname', output_filename])
         
         # Exécuter la commande
-        logger.info(f"Exécution de la commande nconvert: {' '.join(cmd)}")
+        logger.info(f"Exécution de la commande XnConvert: {' '.join(cmd)}")
+        process = subprocess.run(cmd, capture_output=True, text=True)
         
-        # Utiliser l'environnement actuel mais sans arguments supplémentaires
-        process = subprocess.run(cmd, capture_output=True, text=True, env=os.environ)
-        
-        # Vérifier si le fichier temporaire existe
-        if os.path.exists(temp_output):
-            # Renommer le fichier temporaire en nom final
-            os.rename(temp_output, output_path)
-            logger.info(f"Redimensionnement avec nconvert réussi: {output_path}")
+        # Vérifier si la commande a fonctionné
+        if os.path.exists(output_path):
+            logger.info(f"Redimensionnement avec XnConvert réussi: {output_path}")
             return True
         else:
-            # Vérifier si nconvert a créé un fichier avec un autre nom
-            # (souvent, il ajoute une extension par défaut)
-            potential_outputs = [
-                f"{input_path}.jpg",
-                f"{input_path}.jpeg",
-                f"{input_path}.png",
-                os.path.splitext(input_path)[0] + '.jpg',
-                os.path.splitext(input_path)[0] + '.jpeg',
-                os.path.splitext(input_path)[0] + '.png'
-            ]
-            
-            for pot_file in potential_outputs:
-                if os.path.exists(pot_file):
-                    logger.info(f"Fichier trouvé à un emplacement différent: {pot_file}")
-                    os.rename(pot_file, output_path)
-                    logger.info(f"Fichier renommé en: {output_path}")
-                    return True
-            
-            logger.error(f"Erreur lors du redimensionnement avec nconvert: {process.stderr}")
+            logger.error(f"Erreur lors du redimensionnement avec XnConvert: {process.stderr}")
             return False
             
     except Exception as e:
-        logger.error(f"Erreur lors du redimensionnement avec nconvert: {str(e)}")
+        logger.error(f"Erreur lors du redimensionnement avec XnConvert: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
         return False
@@ -330,24 +308,24 @@ def remove_background_api():
         temp_bria_output = os.path.join(OUTPUT_FOLDER, f"{unique_id}_bria.png")
         output_image.save(temp_bria_output, format='PNG')
         
-        # Déterminer le format approprié pour nconvert
-        nconvert_format = 'jpeg' if output_format == 'jpg' else 'png'
+        # Déterminer le format approprié pour XnConvert
+        xnconvert_format = 'jpeg' if output_format == 'jpg' else 'png'
         
-        # Redimensionner et recadrer avec nconvert
+        # Redimensionner et recadrer avec XnConvert
         bg_color = DEFAULT_BG_COLOR
-        resize_success = resize_with_nconvert(
+        resize_success = resize_with_xnconvert(
             temp_bria_output, 
             temp_output_path,
             width=width,
             height=height,
             crop_position=crop_position,
             bg_color=bg_color,
-            output_format=nconvert_format,
+            output_format=xnconvert_format,
             quality=80
         )
         
         if not resize_success:
-            raise Exception("Échec du redimensionnement avec nconvert")
+            raise Exception("Échec du redimensionnement avec XnConvert")
         
         # Vérifier que le fichier existe
         if not os.path.exists(temp_output_path):
@@ -428,7 +406,7 @@ def health_check():
             'authorized_ips': AUTHORIZED_IPS
         },
         'image_processing': {
-            'resize_method': 'nconvert',
+            'resize_method': 'xnconvert',
             'output_formats': ['jpg', 'png'],
             'features': ['background_removal', 'resize', 'crop'],
             'crop_positions': VALID_CROP_POSITIONS,
