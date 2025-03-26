@@ -2,19 +2,29 @@ FROM python:3.9-slim
 
 WORKDIR /app
 
-# Installer les dépendances système nécessaires pour Pillow et autres
+# Installer les dépendances système nécessaires pour Pillow, XnConvert et autres
 RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libjpeg-dev \
     zlib1g-dev \
     wget \
-    libgl1-mesa-glx \
-    libglib2.0-0 \
-    && wget https://download.xnview.com/XnConvert-linux-x64.deb \
-    && apt install -y ./XnConvert-linux-x64.deb \
+    gnupg \
+    libxcb1 \
+    libx11-6 \
+    libxext6 \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Télécharger et installer XnConvert
+RUN wget https://download.xnview.com/XnConvert-linux-x64.deb \
+    && dpkg -i XnConvert-linux-x64.deb || true \
+    && apt-get update && apt-get -f install -y \
     && rm XnConvert-linux-x64.deb \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
+
+# Définir le chemin vers XnConvert
+ENV XNCONVERT_PATH=/usr/bin/xnconvert
 
 # Copier les fichiers de dépendances
 COPY requirements.txt .
