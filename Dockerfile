@@ -8,15 +8,16 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libjpeg-dev \
     zlib1g-dev \
     wget \
-    unzip \
+    tar \
+    libgomp1 \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
 # Télécharger et installer XnView/nconvert
-RUN wget https://download.xnview.com/NConvert-linux64.zip && \
-    unzip NConvert-linux64.zip -d /usr/local/bin && \
+RUN wget https://download.xnview.com/NConvert-linux64.tgz && \
+    tar -xzf NConvert-linux64.tgz -C /usr/local/bin && \
     chmod +x /usr/local/bin/nconvert && \
-    rm NConvert-linux64.zip
+    rm NConvert-linux64.tgz
 
 # Copier les fichiers de dépendances
 COPY requirements.txt .
