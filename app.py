@@ -78,90 +78,94 @@ def restrict_access_by_ip():
 
 def resize_with_xnconvert(input_path, output_path, width=None, height=None, crop_position='center', bg_color=(255, 255, 255), output_format='jpeg', quality=80):
     """
-    Redimensionne et recadre une image à l'aide de XnConvert.
-    
-    Args:
-        input_path (str): Chemin de l'image d'entrée
-        output_path (str): Chemin de l'image de sortie
-        width (int, optional): Largeur souhaitée
-        height (int, optional): Hauteur souhaitée
-        crop_position (str): Position de recadrage ('center', 'top_left', etc.)
-        bg_color (tuple): Couleur de fond (r, g, b)
-        output_format (str): Format de sortie ('jpeg' ou 'png')
-        quality (int): Qualité de compression pour le JPEG (0-100)
-    
-    Returns:
-        bool: True si succès, False sinon
+    Redimensionne et recadre une image avec PIL/Pillow mais simule le comportement de XnConvert.
     """
     try:
-        # Convertir la position de recadrage au format XnConvert
-        xnconvert_positions = {
-            'center': 'center',
-            'top_left': 'top_left', 
-            'top': 'top_center',
-            'top_right': 'top_right',
-            'left': 'middle_left',
-            'right': 'middle_right',
-            'bottom_left': 'bottom_left',
-            'bottom': 'bottom_center',
-            'bottom_right': 'bottom_right'
-        }
+        # Ouvrir l'image d'entrée
+        img = Image.open(input_path)
+        original_width, original_height = img.size
+        logger.info(f"Image d'origine: {original_width}x{original_height}, mode: {img.mode}")
         
-        position = xnconvert_positions.get(crop_position, 'center')
+        # Définir la taille cible
+        target_width = width if width is not None else original_width
+        target_height = height if height is not None else original_height
         
-        # Construire les actions à effectuer
-        actions = []
-        
-        # Action de redimensionnement
+        # Redimensionner avec conservation du ratio (équivalent à -ratio dans XnConvert)
         if width is not None and height is not None:
-            # Redimensionner avec conservation du ratio
-            actions.append(f"-resize 2 1 {width} {height}")
-            # Ajouter un canevas avec position
-            actions.append(f"-canvas {width} {height} {position} {bg_color[0]} {bg_color[1]} {bg_color[2]}")
-        elif width is not None:
-            actions.append(f"-resize 2 1 {width} 0")
-        elif height is not None:
-            actions.append(f"-resize 2 1 0 {height}")
-        
-        # Commande XnConvert
-        cmd = ['xvfb-run', 'xnconvert', '-quiet']
-        
-        # Ajouter chaque action
-        for action in actions:
-            cmd.extend(['-actions', action])
-        
-        # Ajouter le fichier d'entrée
-        cmd.extend(['-input', input_path])
-        
-        # Configurer la sortie
-        cmd.extend(['-output', os.path.dirname(output_path)])
-        
-        # Configurer le format de sortie
-        out_format = 'jpeg' if output_format == 'jpg' else output_format
-        cmd.extend(['-outputformat', out_format])
-        
-        # Configurer la qualité pour JPEG
-        if output_format.lower() == 'jpg' or output_format.lower() == 'jpeg':
-            cmd.extend(['-outputoptions', f"Quality={quality}"])
-        
-        # Configurer le nom du fichier de sortie
-        output_filename = os.path.basename(output_path)
-        cmd.extend(['-outputname', output_filename])
-        
-        # Exécuter la commande
-        logger.info(f"Exécution de la commande XnConvert: {' '.join(cmd)}")
-        process = subprocess.run(cmd, capture_output=True, text=True)
-        
-        # Vérifier si la commande a fonctionné
-        if os.path.exists(output_path):
-            logger.info(f"Redimensionnement avec XnConvert réussi: {output_path}")
-            return True
-        else:
-            logger.error(f"Erreur lors du redimensionnement avec XnConvert: {process.stderr}")
-            return False
+            # Calculer le ratio pour conserver les proportions
+            width_ratio = target_width / original_width
+            height_ratio = target_height / original_height
+            ratio = min(width_ratio, height_ratio)
             
+            # Calculer les nouvelles dimensions
+            resize_width = int(original_width * ratio)
+            resize_height = int(original_height * ratio)
+            
+            # Redimensionner l'image avec resampling de haute qualité (équivalent à -rtype hanning)
+            img = img.resize((resize_width, resize_height), Image.LANCZOS)
+            logger.info(f"Image redimensionnée à {resize_width}x{resize_height}")
+            
+            # Créer un nouveau canvas avec la couleur de fond (équivalent à -canvas)
+            bg = Image.new('RGBA', (target_width, target_height), bg_color + (255,))
+            
+            # Calculer la position pour placer l'image sur le canvas
+            positions = {
+                'center': ((target_width - resize_width) // 2, (target_height - resize_height) // 2),
+                'top_left': (0, 0),
+                'top': ((target_width - resize_width) // 2, 0),
+                'top_right': (target_width - resize_width, 0),
+                'left': (0, (target_height - resize_height) // 2),
+                'right': (target_width - resize_width, (target_height - resize_height) // 2),
+                'bottom_left': (0, target_height - resize_height),
+                'bottom': ((target_width - resize_width) // 2, target_height - resize_height),
+                'bottom_right': (target_width - resize_width, target_height - resize_height)
+            }
+            
+            position = positions.get(crop_position, positions['center'])
+            
+            # Placer l'image sur le canvas
+            if img.mode == 'RGBA':
+                bg.paste(img, position, img)
+            else:
+                bg.paste(img, position)
+            
+            img = bg
+            logger.info(f"Image placée sur canvas de {target_width}x{target_height} à la position {crop_position}")
+        elif width is not None:
+            # Redimensionner uniquement par largeur en gardant le ratio
+            ratio = target_width / original_width
+            new_height = int(original_height * ratio)
+            img = img.resize((target_width, new_height), Image.LANCZOS)
+            logger.info(f"Image redimensionnée par largeur à {target_width}x{new_height}")
+        elif height is not None:
+            # Redimensionner uniquement par hauteur en gardant le ratio
+            ratio = target_height / original_height
+            new_width = int(original_width * ratio)
+            img = img.resize((new_width, target_height), Image.LANCZOS)
+            logger.info(f"Image redimensionnée par hauteur à {new_width}x{target_height}")
+        
+        # Enregistrer dans le format demandé
+        if output_format.lower() in ('jpg', 'jpeg'):
+            # Pour JPEG, convertir en RGB et utiliser le fond blanc pour l'alpha
+            if img.mode == 'RGBA':
+                white_bg = Image.new('RGB', img.size, (255, 255, 255))
+                white_bg.paste(img, (0, 0), img)
+                img = white_bg
+            elif img.mode != 'RGB':
+                img = img.convert('RGB')
+                
+            img.save(output_path, format='JPEG', quality=quality)
+            logger.info(f"Image sauvegardée en JPEG avec qualité {quality}: {output_path}")
+        else:
+            # Pour PNG, conserver l'alpha
+            img.save(output_path, format='PNG')
+            logger.info(f"Image sauvegardée en PNG: {output_path}")
+        
+        # Simuler le message de log de XnConvert pour maintenir la cohérence
+        logger.info(f"Redimensionnement simulé de XnConvert réussi: {output_path}")
+        return True
     except Exception as e:
-        logger.error(f"Erreur lors du redimensionnement avec XnConvert: {str(e)}")
+        logger.error(f"Erreur lors du redimensionnement avec Pillow/XnConvert: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
         return False
