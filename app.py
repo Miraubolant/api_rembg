@@ -4,6 +4,7 @@ import os
 import sys
 import requests
 import time
+import subprocess
 from werkzeug.utils import secure_filename
 import uuid
 from io import BytesIO
@@ -33,15 +34,10 @@ UPLOAD_FOLDER = 'uploads'
 OUTPUT_FOLDER = 'results'
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg'}
 
-# Valeurs par défaut pour le redimensionnement
-DEFAULT_MAX_SIZE = 5000
-MIN_SIZE = 100
-MAX_SIZE = 10000
-
 # Positions de recadrage valides
 VALID_CROP_POSITIONS = ['center', 'top_left', 'top', 'top_right', 'left', 'right', 'bottom_left', 'bottom', 'bottom_right']
 DEFAULT_CROP_POSITION = 'center'
-DEFAULT_BG_COLOR = (255, 255, 255, 255)  # Blanc avec alpha 255
+DEFAULT_BG_COLOR = (255, 255, 255)  # Blanc par défaut
 
 # Créer les dossiers s'ils n'existent pas
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
@@ -80,151 +76,81 @@ def restrict_access_by_ip():
         logger.warning(f"Tentative d'accès non autorisée depuis l'IP: {client_ip}")
         return jsonify({'error': 'Accès non autorisé'}), 403
 
-def optimize_image_for_processing(image, max_width=None, max_height=None, max_size=DEFAULT_MAX_SIZE, keep_ratio=True):
+def resize_with_nconvert(input_path, output_path, width=None, height=None, crop_position='center', bg_color=(255, 255, 255), output_format='jpeg', quality=80):
     """
-    Optimise l'image avant traitement avec options de redimensionnement personnalisables.
+    Redimensionne et recadre une image à l'aide de nconvert.
     
     Args:
-        image (PIL.Image): L'image à optimiser
-        max_width (int, optional): Largeur maximale spécifique
-        max_height (int, optional): Hauteur maximale spécifique
-        max_size (int, optional): Taille maximale (largeur ou hauteur) si max_width et max_height ne sont pas spécifiés
-        keep_ratio (bool): Conserver le ratio d'aspect lors du redimensionnement
+        input_path (str): Chemin de l'image d'entrée
+        output_path (str): Chemin de l'image de sortie
+        width (int, optional): Largeur souhaitée
+        height (int, optional): Hauteur souhaitée
+        crop_position (str): Position de recadrage ('center', 'top_left', etc.)
+        bg_color (tuple): Couleur de fond (r, g, b)
+        output_format (str): Format de sortie ('jpeg' ou 'png')
+        quality (int): Qualité de compression pour le JPEG (0-100)
     
     Returns:
-        PIL.Image: L'image optimisée
+        bool: True si succès, False sinon
     """
-    width, height = image.size
-    
-    # Vérifier si des dimensions spécifiques ont été demandées
-    if max_width is not None or max_height is not None:
-        # Si keep_ratio est True, calculer la dimension manquante en gardant le ratio
-        if keep_ratio:
-            if max_width is not None and max_height is not None:
-                # Les deux dimensions sont spécifiées, on prend la plus restrictive
-                width_ratio = max_width / width
-                height_ratio = max_height / height
-                ratio = min(width_ratio, height_ratio)
-                new_width = int(width * ratio)
-                new_height = int(height * ratio)
-                logger.info(f"Redimensionnement avec ratio conservé: {new_width}x{new_height}")
-            elif max_width is not None:
-                # Largeur spécifiée, calculer la hauteur
-                max_width = min(max(int(max_width), MIN_SIZE), MAX_SIZE)
-                ratio = max_width / width
-                new_width = max_width
-                new_height = int(height * ratio)
-                logger.info(f"Redimensionnement avec largeur spécifique et ratio conservé: {new_width}x{new_height}")
-            else:  # max_height is not None
-                # Hauteur spécifiée, calculer la largeur
-                max_height = min(max(int(max_height), MIN_SIZE), MAX_SIZE)
-                ratio = max_height / height
-                new_height = max_height
-                new_width = int(width * ratio)
-                logger.info(f"Redimensionnement avec hauteur spécifique et ratio conservé: {new_width}x{new_height}")
+    try:
+        # Convertir la position de recadrage au format nconvert
+        nconvert_positions = {
+            'center': 'center',
+            'top_left': 'top_left', 
+            'top': 'top_center',
+            'top_right': 'top_right',
+            'left': 'middle_left',
+            'right': 'middle_right',
+            'bottom_left': 'bottom_left',
+            'bottom': 'bottom_center',
+            'bottom_right': 'bottom_right'
+        }
+        
+        position = nconvert_positions.get(crop_position, 'center')
+        
+        # Préparer la commande nconvert
+        cmd = ['nconvert', '-ratio', '-rtype', 'hanning']
+        
+        # Ajouter les paramètres de redimensionnement
+        if width is not None and height is not None:
+            cmd.extend(['-resize', str(width), str(height)])
+            cmd.extend(['-canvas', str(width), str(height), position])
+        elif width is not None:
+            cmd.extend(['-resize', str(width), '0'])
+        elif height is not None:
+            cmd.extend(['-resize', '0', str(height)])
+        
+        # Ajouter la couleur de fond
+        cmd.extend(['-bgcolor', str(bg_color[0]), str(bg_color[1]), str(bg_color[2])])
+        
+        # Configurer le format de sortie
+        cmd.extend(['-out', output_format])
+        
+        # Ajouter la qualité pour JPEG
+        if output_format.lower() == 'jpeg':
+            cmd.extend(['-q', str(quality)])
+        
+        # Ajouter les chemins d'entrée et de sortie
+        cmd.extend([input_path, '-o', output_path])
+        
+        # Exécuter la commande
+        logger.info(f"Exécution de la commande nconvert: {' '.join(cmd)}")
+        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        
+        if process.returncode == 0:
+            logger.info(f"Redimensionnement avec nconvert réussi: {output_path}")
+            return True
         else:
-            # Ne pas conserver le ratio, utiliser exactement les dimensions spécifiées
-            if max_width is not None:
-                new_width = min(max(int(max_width), MIN_SIZE), MAX_SIZE)
-            else:
-                new_width = width
+            logger.error(f"Erreur lors du redimensionnement avec nconvert: {process.stderr}")
+            return False
             
-            if max_height is not None:
-                new_height = min(max(int(max_height), MIN_SIZE), MAX_SIZE)
-            else:
-                new_height = height
-            
-            logger.info(f"Redimensionnement sans conserver le ratio: {new_width}x{new_height}")
-        
-        image = image.resize((new_width, new_height), Image.LANCZOS)
-    
-    # Sinon, utiliser la logique de redimensionnement par défaut basée sur max_size
-    elif width > max_size or height > max_size:
-        # Limiter max_size à une valeur raisonnable
-        max_size = min(max(int(max_size), MIN_SIZE), MAX_SIZE)
-        
-        # Garder le ratio
-        if width > height:
-            new_width = max_size
-            new_height = int(height * (max_size / width))
-        else:
-            new_height = max_size
-            new_width = int(width * (max_size / width))
-        
-        image = image.resize((new_width, new_height), Image.LANCZOS)
-        logger.info(f"Redimensionnement automatique à {new_width}x{new_height}")
-    
-    return image
-
-def crop_image(image, crop_width=None, crop_height=None, position=DEFAULT_CROP_POSITION):
-    """
-    Recadre l'image selon les dimensions et la position spécifiées.
-    
-    Args:
-        image (PIL.Image): L'image à recadrer
-        crop_width (int, optional): Largeur du recadrage
-        crop_height (int, optional): Hauteur du recadrage
-        position (str): Position du recadrage ('center', 'top_left', etc.)
-    
-    Returns:
-        PIL.Image: L'image recadrée ou l'original si aucun recadrage demandé
-    """
-    # Si aucune dimension de recadrage n'est spécifiée, retourner l'image d'origine
-    if crop_width is None and crop_height is None:
-        return image
-    
-    width, height = image.size
-    
-    # Utiliser les dimensions actuelles si non spécifiées
-    if crop_width is None:
-        crop_width = width
-    if crop_height is None:
-        crop_height = height
-    
-    # S'assurer que les dimensions ne dépassent pas l'image
-    crop_width = min(crop_width, width)
-    crop_height = min(crop_height, height)
-    
-    # Calculer les coordonnées de recadrage selon la position
-    if position == 'center':
-        left = (width - crop_width) // 2
-        top = (height - crop_height) // 2
-    elif position == 'top_left':
-        left = 0
-        top = 0
-    elif position == 'top':
-        left = (width - crop_width) // 2
-        top = 0
-    elif position == 'top_right':
-        left = width - crop_width
-        top = 0
-    elif position == 'left':
-        left = 0
-        top = (height - crop_height) // 2
-    elif position == 'right':
-        left = width - crop_width
-        top = (height - crop_height) // 2
-    elif position == 'bottom_left':
-        left = 0
-        top = height - crop_height
-    elif position == 'bottom':
-        left = (width - crop_width) // 2
-        top = height - crop_height
-    elif position == 'bottom_right':
-        left = width - crop_width
-        top = height - crop_height
-    else:
-        # Position non reconnue, utiliser le centre
-        logger.warning(f"Position de recadrage non reconnue: {position}, utilisation du centre")
-        left = (width - crop_width) // 2
-        top = (height - crop_height) // 2
-    
-    right = left + crop_width
-    bottom = top + crop_height
-    
-    logger.info(f"Recadrage de l'image: ({left}, {top}, {right}, {bottom}) avec position {position}")
-    
-    return image.crop((left, top, right, bottom))
+    except subprocess.CalledProcessError as e:
+        logger.error(f"Erreur lors de l'exécution de nconvert: {e.stderr}")
+        return False
+    except Exception as e:
+        logger.error(f"Erreur lors du redimensionnement avec nconvert: {str(e)}")
+        return False
 
 def process_with_bria(input_image, content_moderation=False):
     """Traitement avec l'API Bria.ai RMBG 2.0"""
@@ -291,16 +217,10 @@ def remove_background_api():
     logger.info("Requête reçue sur /remove-background")
     
     # Récupérer les paramètres de redimensionnement, de modération et de format
-    max_width = request.args.get('max_width')
-    max_height = request.args.get('max_height')
-    max_size = request.args.get('max_size', DEFAULT_MAX_SIZE)
-    keep_ratio = request.args.get('keep_ratio', 'true').lower() in ('true', '1', 't', 'y', 'yes')
+    width = request.args.get('width')
+    height = request.args.get('height')
     content_moderation = request.args.get('content_moderation', 'false').lower() in ('true', '1', 't', 'y', 'yes')
     output_format = request.args.get('format', 'jpg').lower()  # Format par défaut jpg
-    
-    # Récupérer les paramètres de recadrage
-    crop_width = request.args.get('crop_width')
-    crop_height = request.args.get('crop_height')
     crop_position = request.args.get('crop_position', DEFAULT_CROP_POSITION).lower()
     
     # Vérifier que la position de recadrage est valide
@@ -314,46 +234,21 @@ def remove_background_api():
         output_format = 'jpg'
     
     # Convertir les paramètres de dimension en entiers si présents
-    if max_width:
+    if width:
         try:
-            max_width = int(max_width)
-            logger.info(f"Largeur maximale demandée: {max_width}")
+            width = int(width)
+            logger.info(f"Largeur demandée: {width}")
         except ValueError:
-            logger.warning(f"Valeur invalide pour max_width: {max_width}")
-            return jsonify({'error': 'La valeur de max_width doit être un nombre entier'}), 400
+            logger.warning(f"Valeur invalide pour width: {width}")
+            return jsonify({'error': 'La valeur de width doit être un nombre entier'}), 400
     
-    if max_height:
+    if height:
         try:
-            max_height = int(max_height)
-            logger.info(f"Hauteur maximale demandée: {max_height}")
+            height = int(height)
+            logger.info(f"Hauteur demandée: {height}")
         except ValueError:
-            logger.warning(f"Valeur invalide pour max_height: {max_height}")
-            return jsonify({'error': 'La valeur de max_height doit être un nombre entier'}), 400
-    
-    if max_size:
-        try:
-            max_size = int(max_size)
-            logger.info(f"Taille maximale demandée: {max_size}")
-        except ValueError:
-            logger.warning(f"Valeur invalide pour max_size: {max_size}")
-            return jsonify({'error': 'La valeur de max_size doit être un nombre entier'}), 400
-    
-    # Convertir les paramètres de recadrage en entiers si présents
-    if crop_width:
-        try:
-            crop_width = int(crop_width)
-            logger.info(f"Largeur de recadrage demandée: {crop_width}")
-        except ValueError:
-            logger.warning(f"Valeur invalide pour crop_width: {crop_width}")
-            return jsonify({'error': 'La valeur de crop_width doit être un nombre entier'}), 400
-    
-    if crop_height:
-        try:
-            crop_height = int(crop_height)
-            logger.info(f"Hauteur de recadrage demandée: {crop_height}")
-        except ValueError:
-            logger.warning(f"Valeur invalide pour crop_height: {crop_height}")
-            return jsonify({'error': 'La valeur de crop_height doit être un nombre entier'}), 400
+            logger.warning(f"Valeur invalide pour height: {height}")
+            return jsonify({'error': 'La valeur de height doit être un nombre entier'}), 400
     
     # Vérifier si une image a été envoyée
     if 'image' not in request.files:
@@ -373,19 +268,18 @@ def remove_background_api():
         return jsonify({'error': f'Format de fichier non supporté. Formats acceptés: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
     
     try:
-        # Lire le fichier en mémoire
+        # Génération d'un ID unique pour les fichiers temporaires
+        unique_id = str(uuid.uuid4())
+        temp_input_path = os.path.join(UPLOAD_FOLDER, f"{unique_id}_input.png")
+        temp_output_path = os.path.join(OUTPUT_FOLDER, f"{unique_id}_output.{output_format}")
+        
+        # Lire le fichier en mémoire et sauvegarder l'image d'entrée
         file_data = file.read()
         input_image = Image.open(BytesIO(file_data))
         logger.info(f"Image ouverte, taille: {input_image.size}, mode: {input_image.mode}")
         
-        # Optimiser l'image avant envoi avec les paramètres spécifiés
-        input_image = optimize_image_for_processing(
-            input_image, 
-            max_width=max_width, 
-            max_height=max_height, 
-            max_size=max_size,
-            keep_ratio=keep_ratio
-        )
+        # Sauvegarder l'image d'entrée
+        input_image.save(temp_input_path, format='PNG')
         
         # Traiter l'image avec Bria.ai
         logger.info("Début du traitement avec Bria.ai")
@@ -396,52 +290,52 @@ def remove_background_api():
         
         logger.info(f"Traitement terminé avec succès, mode de l'image résultante: {output_image.mode}")
         
-        # Recadrer l'image si des paramètres de recadrage sont spécifiés
-        if crop_width is not None or crop_height is not None:
-            output_image = crop_image(
-                output_image, 
-                crop_width=crop_width, 
-                crop_height=crop_height, 
-                position=crop_position
-            )
-            logger.info(f"Image recadrée avec succès, nouvelle taille: {output_image.size}")
+        # Sauvegarder l'image après suppression de fond
+        temp_bria_output = os.path.join(OUTPUT_FOLDER, f"{unique_id}_bria.png")
+        output_image.save(temp_bria_output, format='PNG')
         
-        # Envoyer directement l'image via BytesIO
-        logger.info(f"Préparation de l'image {output_format.upper()} pour l'envoi")
-        img_io = BytesIO()
+        # Déterminer le format approprié pour nconvert
+        nconvert_format = 'jpeg' if output_format == 'jpg' else 'png'
         
-        # Définir le format de sortie et la qualité pour le JPG
-        if output_format == 'jpg':
-            # Pour le JPG, convertir en RGB (pas d'alpha) et ajouter un fond blanc si nécessaire
-            if output_image.mode == 'RGBA':
-                # Créer un fond blanc
-                background = Image.new('RGB', output_image.size, (255, 255, 255))
-                # Coller l'image avec alpha sur le fond blanc
-                background.paste(output_image, mask=output_image.split()[3])  # 3 est le canal alpha
-                output_image = background
-            elif output_image.mode != 'RGB':
-                output_image = output_image.convert('RGB')
-            
-            # Enregistrer en JPG avec une bonne qualité
-            output_image.save(img_io, format='JPEG', quality=95)
-            mimetype = 'image/jpeg'
-        else:  # png
-            # Pour le PNG, s'assurer que l'image est en RGBA pour la transparence
-            if output_image.mode != 'RGBA':
-                output_image = output_image.convert('RGBA')
-            output_image.save(img_io, format='PNG')
-            mimetype = 'image/png'
-            
-        img_io.seek(0)
+        # Redimensionner et recadrer avec nconvert
+        bg_color = DEFAULT_BG_COLOR
+        resize_success = resize_with_nconvert(
+            temp_bria_output, 
+            temp_output_path,
+            width=width,
+            height=height,
+            crop_position=crop_position,
+            bg_color=bg_color,
+            output_format=nconvert_format,
+            quality=80
+        )
         
-        # Afficher les informations sur la taille de l'image
-        img_size = img_io.getbuffer().nbytes
-        logger.info(f"Taille de l'image à envoyer: {img_size} octets")
+        if not resize_success:
+            raise Exception("Échec du redimensionnement avec nconvert")
+        
+        # Vérifier que le fichier existe
+        if not os.path.exists(temp_output_path):
+            raise Exception("Le fichier de sortie n'a pas été créé par nconvert")
+        
+        # Ouvrir l'image résultante
+        with open(temp_output_path, 'rb') as f:
+            result_data = f.read()
+        
+        # Déterminer le type MIME
+        mimetype = 'image/jpeg' if output_format == 'jpg' else 'image/png'
         
         # Utiliser le nom de fichier original avec la bonne extension
         original_filename = secure_filename(file.filename)
         base_name = os.path.splitext(original_filename)[0]
         download_name = f"{base_name}.{output_format}"
+        
+        # Préparer le BytesIO pour l'envoi
+        img_io = BytesIO(result_data)
+        img_io.seek(0)
+        
+        # Afficher les informations sur la taille de l'image
+        img_size = img_io.getbuffer().nbytes
+        logger.info(f"Taille de l'image à envoyer: {img_size} octets")
         
         # Envoyer l'image avec le bon type MIME
         logger.info(f"Envoi du fichier {output_format.upper()} au client avec le nom: {download_name}")
@@ -468,6 +362,15 @@ def remove_background_api():
         return jsonify({'error': f'Erreur pendant le traitement: {str(e)}', 'details': error_details}), 500
     
     finally:
+        # Nettoyer les fichiers temporaires
+        try:
+            for temp_file in [temp_input_path, temp_bria_output, temp_output_path]:
+                if 'temp_file' in locals() and os.path.exists(temp_file):
+                    os.remove(temp_file)
+                    logger.info(f"Fichier temporaire supprimé: {temp_file}")
+        except Exception as e:
+            logger.error(f"Erreur lors du nettoyage des fichiers temporaires: {str(e)}")
+            
         # Nettoyer les ressources
         if 'input_image' in locals():
             input_image.close()
@@ -489,14 +392,12 @@ def health_check():
             'authorized_ips': AUTHORIZED_IPS
         },
         'image_processing': {
-            'default_max_size': DEFAULT_MAX_SIZE,
-            'min_size_allowed': MIN_SIZE,
-            'max_size_allowed': MAX_SIZE,
+            'resize_method': 'nconvert',
             'output_formats': ['jpg', 'png'],
             'features': ['background_removal', 'resize', 'crop'],
             'crop_positions': VALID_CROP_POSITIONS,
             'default_crop_position': DEFAULT_CROP_POSITION,
-            'keep_ratio_default': True
+            'default_bg_color': DEFAULT_BG_COLOR
         }
     })
 
