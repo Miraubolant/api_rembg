@@ -7,9 +7,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libjpeg-dev \
     zlib1g-dev \
-    xnconvert \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    wget \
+    && wget https://download.xnview.com/XnConvert-linux-x64.deb \
+    && apt install -y ./XnConvert-linux-x64.deb \
+    && rm XnConvert-linux-x64.deb \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
 
 # Copier les fichiers de dépendances
 COPY requirements.txt .
