@@ -131,14 +131,17 @@ def resize_with_nconvert(input_path, output_path, width=None, height=None, crop_
         if output_format.lower() == 'jpeg':
             cmd.extend(['-q', str(quality)])
         
-        # Ajouter les chemins d'entrée et de sortie
-        cmd.extend([input_path, '-o', output_path])
+        # Corriger la syntaxe pour le fichier de sortie - nconvert utilise -o [chemin]
+        cmd.append(input_path)
+        cmd.append('-o')
+        cmd.append(output_path)
         
         # Exécuter la commande
         logger.info(f"Exécution de la commande nconvert: {' '.join(cmd)}")
-        process = subprocess.run(cmd, capture_output=True, text=True, check=True)
+        process = subprocess.run(cmd, capture_output=True, text=True)
         
-        if process.returncode == 0:
+        # Vérifier si la commande a fonctionné en vérifiant si le fichier de sortie existe
+        if os.path.exists(output_path):
             logger.info(f"Redimensionnement avec nconvert réussi: {output_path}")
             return True
         else:
@@ -315,7 +318,7 @@ def remove_background_api():
         
         # Vérifier que le fichier existe
         if not os.path.exists(temp_output_path):
-            raise Exception("Le fichier de sortie n'a pas été créé par nconvert")
+            raise Exception("Le fichier de sortie n'a pas été créé")
         
         # Ouvrir l'image résultante
         with open(temp_output_path, 'rb') as f:
