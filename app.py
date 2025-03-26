@@ -38,6 +38,11 @@ DEFAULT_MAX_SIZE = 5000
 MIN_SIZE = 100
 MAX_SIZE = 10000
 
+# Positions de recadrage valides
+VALID_CROP_POSITIONS = ['center', 'top_left', 'top', 'top_right', 'left', 'right', 'bottom_left', 'bottom', 'bottom_right']
+DEFAULT_CROP_POSITION = 'center'
+DEFAULT_BG_COLOR = (255, 255, 255, 255)  # Blanc avec alpha 255
+
 # Créer les dossiers s'ils n'existent pas
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 os.makedirs(OUTPUT_FOLDER, exist_ok=True)
@@ -75,7 +80,7 @@ def restrict_access_by_ip():
         logger.warning(f"Tentative d'accès non autorisée depuis l'IP: {client_ip}")
         return jsonify({'error': 'Accès non autorisé'}), 403
 
-def optimize_image_for_processing(image, max_width=None, max_height=None, max_size=DEFAULT_MAX_SIZE):
+def optimize_image_for_processing(image, max_width=None, max_height=None, max_size=DEFAULT_MAX_SIZE, keep_ratio=True):
     """
     Optimise l'image avant traitement avec options de redimensionnement personnalisables.
     
@@ -84,6 +89,7 @@ def optimize_image_for_processing(image, max_width=None, max_height=None, max_si
         max_width (int, optional): Largeur maximale spécifique
         max_height (int, optional): Hauteur maximale spécifique
         max_size (int, optional): Taille maximale (largeur ou hauteur) si max_width et max_height ne sont pas spécifiés
+        keep_ratio (bool): Conserver le ratio d'aspect lors du redimensionnement
     
     Returns:
         PIL.Image: L'image optimisée
@@ -92,30 +98,43 @@ def optimize_image_for_processing(image, max_width=None, max_height=None, max_si
     
     # Vérifier si des dimensions spécifiques ont été demandées
     if max_width is not None or max_height is not None:
-        # Si une seule dimension est spécifiée, calculer l'autre en gardant le ratio
-        if max_width is not None and max_height is None:
-            # Limiter max_width à une valeur raisonnable
-            max_width = min(max(int(max_width), MIN_SIZE), MAX_SIZE)
-            ratio = max_width / width
-            new_width = max_width
-            new_height = int(height * ratio)
-            logger.info(f"Redimensionnement avec largeur spécifique: {new_width}x{new_height}")
-        
-        elif max_height is not None and max_width is None:
-            # Limiter max_height à une valeur raisonnable
-            max_height = min(max(int(max_height), MIN_SIZE), MAX_SIZE)
-            ratio = max_height / height
-            new_height = max_height
-            new_width = int(width * ratio)
-            logger.info(f"Redimensionnement avec hauteur spécifique: {new_width}x{new_height}")
-        
+        # Si keep_ratio est True, calculer la dimension manquante en gardant le ratio
+        if keep_ratio:
+            if max_width is not None and max_height is not None:
+                # Les deux dimensions sont spécifiées, on prend la plus restrictive
+                width_ratio = max_width / width
+                height_ratio = max_height / height
+                ratio = min(width_ratio, height_ratio)
+                new_width = int(width * ratio)
+                new_height = int(height * ratio)
+                logger.info(f"Redimensionnement avec ratio conservé: {new_width}x{new_height}")
+            elif max_width is not None:
+                # Largeur spécifiée, calculer la hauteur
+                max_width = min(max(int(max_width), MIN_SIZE), MAX_SIZE)
+                ratio = max_width / width
+                new_width = max_width
+                new_height = int(height * ratio)
+                logger.info(f"Redimensionnement avec largeur spécifique et ratio conservé: {new_width}x{new_height}")
+            else:  # max_height is not None
+                # Hauteur spécifiée, calculer la largeur
+                max_height = min(max(int(max_height), MIN_SIZE), MAX_SIZE)
+                ratio = max_height / height
+                new_height = max_height
+                new_width = int(width * ratio)
+                logger.info(f"Redimensionnement avec hauteur spécifique et ratio conservé: {new_width}x{new_height}")
         else:
-            # Les deux dimensions sont spécifiées
-            max_width = min(max(int(max_width), MIN_SIZE), MAX_SIZE)
-            max_height = min(max(int(max_height), MIN_SIZE), MAX_SIZE)
-            new_width = max_width
-            new_height = max_height
-            logger.info(f"Redimensionnement avec dimensions spécifiques: {new_width}x{new_height}")
+            # Ne pas conserver le ratio, utiliser exactement les dimensions spécifiées
+            if max_width is not None:
+                new_width = min(max(int(max_width), MIN_SIZE), MAX_SIZE)
+            else:
+                new_width = width
+            
+            if max_height is not None:
+                new_height = min(max(int(max_height), MIN_SIZE), MAX_SIZE)
+            else:
+                new_height = height
+            
+            logger.info(f"Redimensionnement sans conserver le ratio: {new_width}x{new_height}")
         
         image = image.resize((new_width, new_height), Image.LANCZOS)
     
@@ -130,12 +149,82 @@ def optimize_image_for_processing(image, max_width=None, max_height=None, max_si
             new_height = int(height * (max_size / width))
         else:
             new_height = max_size
-            new_width = int(width * (max_size / height))
+            new_width = int(width * (max_size / width))
         
         image = image.resize((new_width, new_height), Image.LANCZOS)
         logger.info(f"Redimensionnement automatique à {new_width}x{new_height}")
     
     return image
+
+def crop_image(image, crop_width=None, crop_height=None, position=DEFAULT_CROP_POSITION):
+    """
+    Recadre l'image selon les dimensions et la position spécifiées.
+    
+    Args:
+        image (PIL.Image): L'image à recadrer
+        crop_width (int, optional): Largeur du recadrage
+        crop_height (int, optional): Hauteur du recadrage
+        position (str): Position du recadrage ('center', 'top_left', etc.)
+    
+    Returns:
+        PIL.Image: L'image recadrée ou l'original si aucun recadrage demandé
+    """
+    # Si aucune dimension de recadrage n'est spécifiée, retourner l'image d'origine
+    if crop_width is None and crop_height is None:
+        return image
+    
+    width, height = image.size
+    
+    # Utiliser les dimensions actuelles si non spécifiées
+    if crop_width is None:
+        crop_width = width
+    if crop_height is None:
+        crop_height = height
+    
+    # S'assurer que les dimensions ne dépassent pas l'image
+    crop_width = min(crop_width, width)
+    crop_height = min(crop_height, height)
+    
+    # Calculer les coordonnées de recadrage selon la position
+    if position == 'center':
+        left = (width - crop_width) // 2
+        top = (height - crop_height) // 2
+    elif position == 'top_left':
+        left = 0
+        top = 0
+    elif position == 'top':
+        left = (width - crop_width) // 2
+        top = 0
+    elif position == 'top_right':
+        left = width - crop_width
+        top = 0
+    elif position == 'left':
+        left = 0
+        top = (height - crop_height) // 2
+    elif position == 'right':
+        left = width - crop_width
+        top = (height - crop_height) // 2
+    elif position == 'bottom_left':
+        left = 0
+        top = height - crop_height
+    elif position == 'bottom':
+        left = (width - crop_width) // 2
+        top = height - crop_height
+    elif position == 'bottom_right':
+        left = width - crop_width
+        top = height - crop_height
+    else:
+        # Position non reconnue, utiliser le centre
+        logger.warning(f"Position de recadrage non reconnue: {position}, utilisation du centre")
+        left = (width - crop_width) // 2
+        top = (height - crop_height) // 2
+    
+    right = left + crop_width
+    bottom = top + crop_height
+    
+    logger.info(f"Recadrage de l'image: ({left}, {top}, {right}, {bottom}) avec position {position}")
+    
+    return image.crop((left, top, right, bottom))
 
 def process_with_bria(input_image, content_moderation=False):
     """Traitement avec l'API Bria.ai RMBG 2.0"""
@@ -205,15 +294,26 @@ def remove_background_api():
     max_width = request.args.get('max_width')
     max_height = request.args.get('max_height')
     max_size = request.args.get('max_size', DEFAULT_MAX_SIZE)
+    keep_ratio = request.args.get('keep_ratio', 'true').lower() in ('true', '1', 't', 'y', 'yes')
     content_moderation = request.args.get('content_moderation', 'false').lower() in ('true', '1', 't', 'y', 'yes')
     output_format = request.args.get('format', 'jpg').lower()  # Format par défaut jpg
+    
+    # Récupérer les paramètres de recadrage
+    crop_width = request.args.get('crop_width')
+    crop_height = request.args.get('crop_height')
+    crop_position = request.args.get('crop_position', DEFAULT_CROP_POSITION).lower()
+    
+    # Vérifier que la position de recadrage est valide
+    if crop_position not in VALID_CROP_POSITIONS:
+        logger.warning(f"Position de recadrage invalide: {crop_position}, utilisation de {DEFAULT_CROP_POSITION}")
+        crop_position = DEFAULT_CROP_POSITION
     
     # Vérifier que le format de sortie est valide
     if output_format not in ['jpg', 'png']:
         logger.warning(f"Format de sortie invalide: {output_format}, utilisation de jpg par défaut")
         output_format = 'jpg'
     
-    # Convertir les paramètres en entiers si présents
+    # Convertir les paramètres de dimension en entiers si présents
     if max_width:
         try:
             max_width = int(max_width)
@@ -237,6 +337,23 @@ def remove_background_api():
         except ValueError:
             logger.warning(f"Valeur invalide pour max_size: {max_size}")
             return jsonify({'error': 'La valeur de max_size doit être un nombre entier'}), 400
+    
+    # Convertir les paramètres de recadrage en entiers si présents
+    if crop_width:
+        try:
+            crop_width = int(crop_width)
+            logger.info(f"Largeur de recadrage demandée: {crop_width}")
+        except ValueError:
+            logger.warning(f"Valeur invalide pour crop_width: {crop_width}")
+            return jsonify({'error': 'La valeur de crop_width doit être un nombre entier'}), 400
+    
+    if crop_height:
+        try:
+            crop_height = int(crop_height)
+            logger.info(f"Hauteur de recadrage demandée: {crop_height}")
+        except ValueError:
+            logger.warning(f"Valeur invalide pour crop_height: {crop_height}")
+            return jsonify({'error': 'La valeur de crop_height doit être un nombre entier'}), 400
     
     # Vérifier si une image a été envoyée
     if 'image' not in request.files:
@@ -266,7 +383,8 @@ def remove_background_api():
             input_image, 
             max_width=max_width, 
             max_height=max_height, 
-            max_size=max_size
+            max_size=max_size,
+            keep_ratio=keep_ratio
         )
         
         # Traiter l'image avec Bria.ai
@@ -277,6 +395,16 @@ def remove_background_api():
         output_image = future.result()
         
         logger.info(f"Traitement terminé avec succès, mode de l'image résultante: {output_image.mode}")
+        
+        # Recadrer l'image si des paramètres de recadrage sont spécifiés
+        if crop_width is not None or crop_height is not None:
+            output_image = crop_image(
+                output_image, 
+                crop_width=crop_width, 
+                crop_height=crop_height, 
+                position=crop_position
+            )
+            logger.info(f"Image recadrée avec succès, nouvelle taille: {output_image.size}")
         
         # Envoyer directement l'image via BytesIO
         logger.info(f"Préparation de l'image {output_format.upper()} pour l'envoi")
@@ -364,7 +492,11 @@ def health_check():
             'default_max_size': DEFAULT_MAX_SIZE,
             'min_size_allowed': MIN_SIZE,
             'max_size_allowed': MAX_SIZE,
-            'output_formats': ['jpg', 'png']
+            'output_formats': ['jpg', 'png'],
+            'features': ['background_removal', 'resize', 'crop'],
+            'crop_positions': VALID_CROP_POSITIONS,
+            'default_crop_position': DEFAULT_CROP_POSITION,
+            'keep_ratio_default': True
         }
     })
 
