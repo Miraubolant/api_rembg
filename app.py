@@ -201,11 +201,17 @@ def remove_background_api():
         
     logger.info("Requête reçue sur /remove-background")
     
-    # Récupérer les paramètres de redimensionnement et de modération
+    # Récupérer les paramètres de redimensionnement, de modération et de format
     max_width = request.args.get('max_width')
     max_height = request.args.get('max_height')
     max_size = request.args.get('max_size', DEFAULT_MAX_SIZE)
     content_moderation = request.args.get('content_moderation', 'false').lower() in ('true', '1', 't', 'y', 'yes')
+    output_format = request.args.get('format', 'jpg').lower()  # Format par défaut jpg
+    
+    # Vérifier que le format de sortie est valide
+    if output_format not in ['jpg', 'png']:
+        logger.warning(f"Format de sortie invalide: {output_format}, utilisation de jpg par défaut")
+        output_format = 'jpg'
     
     # Convertir les paramètres en entiers si présents
     if max_width:
@@ -272,28 +278,49 @@ def remove_background_api():
         
         logger.info(f"Traitement terminé avec succès, mode de l'image résultante: {output_image.mode}")
         
-        # Envoyer directement l'image en PNG avec transparence via BytesIO
-        logger.info("Préparation de l'image PNG avec transparence pour l'envoi")
+        # Envoyer directement l'image via BytesIO
+        logger.info(f"Préparation de l'image {output_format.upper()} pour l'envoi")
         img_io = BytesIO()
         
-        # Assurez-vous que l'image est en mode RGBA pour la transparence
-        if output_image.mode != 'RGBA':
-            logger.info(f"Conversion de l'image du mode {output_image.mode} vers RGBA")
-            output_image = output_image.convert('RGBA')
+        # Définir le format de sortie et la qualité pour le JPG
+        if output_format == 'jpg':
+            # Pour le JPG, convertir en RGB (pas d'alpha) et ajouter un fond blanc si nécessaire
+            if output_image.mode == 'RGBA':
+                # Créer un fond blanc
+                background = Image.new('RGB', output_image.size, (255, 255, 255))
+                # Coller l'image avec alpha sur le fond blanc
+                background.paste(output_image, mask=output_image.split()[3])  # 3 est le canal alpha
+                output_image = background
+            elif output_image.mode != 'RGB':
+                output_image = output_image.convert('RGB')
             
-        output_image.save(img_io, format='PNG')
+            # Enregistrer en JPG avec une bonne qualité
+            output_image.save(img_io, format='JPEG', quality=95)
+            mimetype = 'image/jpeg'
+        else:  # png
+            # Pour le PNG, s'assurer que l'image est en RGBA pour la transparence
+            if output_image.mode != 'RGBA':
+                output_image = output_image.convert('RGBA')
+            output_image.save(img_io, format='PNG')
+            mimetype = 'image/png'
+            
         img_io.seek(0)
         
         # Afficher les informations sur la taille de l'image
         img_size = img_io.getbuffer().nbytes
         logger.info(f"Taille de l'image à envoyer: {img_size} octets")
         
+        # Utiliser le nom de fichier original avec la bonne extension
+        original_filename = secure_filename(file.filename)
+        base_name = os.path.splitext(original_filename)[0]
+        download_name = f"{base_name}.{output_format}"
+        
         # Envoyer l'image avec le bon type MIME
-        logger.info("Envoi du fichier PNG au client")
+        logger.info(f"Envoi du fichier {output_format.upper()} au client avec le nom: {download_name}")
         response = send_file(
             img_io, 
-            mimetype='image/png',
-            download_name='image_sans_fond.png',
+            mimetype=mimetype,
+            download_name=download_name,
             as_attachment=True  # Force le téléchargement plutôt que l'affichage
         )
         
@@ -336,7 +363,8 @@ def health_check():
         'image_processing': {
             'default_max_size': DEFAULT_MAX_SIZE,
             'min_size_allowed': MIN_SIZE,
-            'max_size_allowed': MAX_SIZE
+            'max_size_allowed': MAX_SIZE,
+            'output_formats': ['jpg', 'png']
         }
     })
 
