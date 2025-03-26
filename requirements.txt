@@ -5,4 +5,3 @@ pillow==9.5.0
 requests==2.31.0
 gunicorn==20.1.0
 python-dotenv==1.0.0
-xnconvert==1.0.0
