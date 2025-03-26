@@ -9,6 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     zlib1g-dev \
     wget \
     libgl1-mesa-glx \
+    libglib2.0-0 \
     && wget https://download.xnview.com/XnConvert-linux-x64.deb \
     && apt install -y ./XnConvert-linux-x64.deb \
     && rm XnConvert-linux-x64.deb \
