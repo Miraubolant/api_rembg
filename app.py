@@ -76,9 +76,9 @@ def restrict_access_by_ip():
         logger.warning(f"Tentative d'accès non autorisée depuis l'IP: {client_ip}")
         return jsonify({'error': 'Accès non autorisé'}), 403
 
-def resize_with_pillow(input_path, output_path, width=None, height=None, crop_position='center', bg_color=(255, 255, 255), output_format='jpeg', quality=80):
+def resize_with_imagemagick(input_path, output_path, width=None, height=None, crop_position='center', bg_color=(255, 255, 255), output_format='jpeg', quality=80):
     """
-    Redimensionne et recadre une image à l'aide de Pillow.
+    Redimensionne et recadre une image à l'aide d'ImageMagick.
     
     Args:
         input_path (str): Chemin de l'image d'entrée
@@ -94,89 +94,69 @@ def resize_with_pillow(input_path, output_path, width=None, height=None, crop_po
         bool: True si succès, False sinon
     """
     try:
-        # Ouvrir l'image d'entrée
-        img = Image.open(input_path)
-        original_width, original_height = img.size
-        logger.info(f"Image d'origine: {original_width}x{original_height}, mode: {img.mode}")
+        # Convertir la position de recadrage au format ImageMagick gravity
+        gravity_map = {
+            'center': 'Center',
+            'top_left': 'NorthWest', 
+            'top': 'North',
+            'top_right': 'NorthEast',
+            'left': 'West',
+            'right': 'East',
+            'bottom_left': 'SouthWest',
+            'bottom': 'South',
+            'bottom_right': 'SouthEast'
+        }
         
-        # Définir la taille cible
-        target_width = width if width is not None else original_width
-        target_height = height if height is not None else original_height
+        gravity = gravity_map.get(crop_position, 'Center')
         
-        # Redimensionner avec conservation du ratio (équivalent à -ratio dans nconvert)
+        # Convertir la couleur de fond au format RGB pour ImageMagick
+        bg_color_str = f'rgb({bg_color[0]},{bg_color[1]},{bg_color[2]})'
+        
+        # Construire la commande convert d'ImageMagick
+        cmd = ['convert']
+        
+        # Ajouter le fichier d'entrée
+        cmd.append(input_path)
+        
+        # Ajouter les options de redimensionnement
         if width is not None and height is not None:
-            # Calculer le ratio pour conserver les proportions
-            width_ratio = target_width / original_width
-            height_ratio = target_height / original_height
-            ratio = min(width_ratio, height_ratio)
+            # Redimensionner en conservant le ratio (équivalent à -ratio dans nconvert)
+            cmd.extend(['-resize', f'{width}x{height}'])
             
-            # Calculer les nouvelles dimensions
-            resize_width = int(original_width * ratio)
-            resize_height = int(original_height * ratio)
-            
-            # Redimensionner l'image avec resampling de haute qualité (équivalent à -rtype hanning)
-            img = img.resize((resize_width, resize_height), Image.LANCZOS)
-            logger.info(f"Image redimensionnée à {resize_width}x{resize_height}")
-            
-            # Créer un nouveau canvas avec la couleur de fond (équivalent à -canvas)
-            bg = Image.new('RGBA', (target_width, target_height), bg_color + (255,))
-            
-            # Calculer la position pour placer l'image sur le canvas
-            positions = {
-                'center': ((target_width - resize_width) // 2, (target_height - resize_height) // 2),
-                'top_left': (0, 0),
-                'top': ((target_width - resize_width) // 2, 0),
-                'top_right': (target_width - resize_width, 0),
-                'left': (0, (target_height - resize_height) // 2),
-                'right': (target_width - resize_width, (target_height - resize_height) // 2),
-                'bottom_left': (0, target_height - resize_height),
-                'bottom': ((target_width - resize_width) // 2, target_height - resize_height),
-                'bottom_right': (target_width - resize_width, target_height - resize_height)
-            }
-            
-            position = positions.get(crop_position, positions['center'])
-            
-            # Placer l'image sur le canvas
-            if img.mode == 'RGBA':
-                bg.paste(img, position, img)
-            else:
-                bg.paste(img, position)
-            
-            img = bg
-            logger.info(f"Image placée sur canvas de {target_width}x{target_height} à la position {crop_position}")
+            # Définir le canvas avec la position (équivalent à -canvas dans nconvert)
+            cmd.extend([
+                '-background', bg_color_str, 
+                '-gravity', gravity, 
+                '-extent', f'{width}x{height}'
+            ])
         elif width is not None:
-            # Redimensionner uniquement par largeur en gardant le ratio
-            ratio = target_width / original_width
-            new_height = int(original_height * ratio)
-            img = img.resize((target_width, new_height), Image.LANCZOS)
-            logger.info(f"Image redimensionnée par largeur à {target_width}x{new_height}")
+            # Redimensionner par largeur en conservant le ratio
+            cmd.extend(['-resize', f'{width}x'])
         elif height is not None:
-            # Redimensionner uniquement par hauteur en gardant le ratio
-            ratio = target_height / original_height
-            new_width = int(original_width * ratio)
-            img = img.resize((new_width, target_height), Image.LANCZOS)
-            logger.info(f"Image redimensionnée par hauteur à {new_width}x{target_height}")
+            # Redimensionner par hauteur en conservant le ratio
+            cmd.extend(['-resize', f'x{height}'])
         
-        # Enregistrer dans le format demandé
+        # Ajouter les options de qualité pour JPEG
         if output_format.lower() in ('jpg', 'jpeg'):
-            # Pour JPEG, convertir en RGB et utiliser le fond blanc pour l'alpha
-            if img.mode == 'RGBA':
-                white_bg = Image.new('RGB', img.size, (255, 255, 255))
-                white_bg.paste(img, (0, 0), img)
-                img = white_bg
-            elif img.mode != 'RGB':
-                img = img.convert('RGB')
-                
-            img.save(output_path, format='JPEG', quality=quality)
-            logger.info(f"Image sauvegardée en JPEG avec qualité {quality}: {output_path}")
-        else:
-            # Pour PNG, conserver l'alpha
-            img.save(output_path, format='PNG')
-            logger.info(f"Image sauvegardée en PNG: {output_path}")
+            cmd.extend(['-quality', str(quality)])
         
-        return True
+        # Ajouter le fichier de sortie
+        cmd.append(output_path)
+        
+        # Exécuter la commande
+        logger.info(f"Exécution de la commande ImageMagick: {' '.join(cmd)}")
+        process = subprocess.run(cmd, capture_output=True, text=True)
+        
+        # Vérifier si la commande a fonctionné
+        if process.returncode == 0 and os.path.exists(output_path):
+            logger.info(f"Redimensionnement avec ImageMagick réussi: {output_path}")
+            return True
+        else:
+            logger.error(f"Erreur lors du redimensionnement avec ImageMagick: {process.stderr}")
+            return False
+            
     except Exception as e:
-        logger.error(f"Erreur lors du redimensionnement avec Pillow: {str(e)}")
+        logger.error(f"Erreur lors du redimensionnement avec ImageMagick: {str(e)}")
         import traceback
         logger.error(traceback.format_exc())
         return False
@@ -323,24 +303,24 @@ def remove_background_api():
         temp_bria_output = os.path.join(OUTPUT_FOLDER, f"{unique_id}_bria.png")
         output_image.save(temp_bria_output, format='PNG')
         
-        # Déterminer le format approprié pour Pillow
-        pillow_format = 'jpeg' if output_format == 'jpg' else 'png'
+        # Déterminer le format approprié pour ImageMagick
+        imagemagick_format = 'jpeg' if output_format == 'jpg' else 'png'
         
-        # Redimensionner et recadrer avec Pillow
+        # Redimensionner et recadrer avec ImageMagick
         bg_color = DEFAULT_BG_COLOR
-        resize_success = resize_with_pillow(
+        resize_success = resize_with_imagemagick(
             temp_bria_output, 
             temp_output_path,
             width=width,
             height=height,
             crop_position=crop_position,
             bg_color=bg_color,
-            output_format=pillow_format,
+            output_format=imagemagick_format,
             quality=80
         )
         
         if not resize_success:
-            raise Exception("Échec du redimensionnement avec Pillow")
+            raise Exception("Échec du redimensionnement avec ImageMagick")
         
         # Vérifier que le fichier existe
         if not os.path.exists(temp_output_path):
@@ -421,7 +401,7 @@ def health_check():
             'authorized_ips': AUTHORIZED_IPS
         },
         'image_processing': {
-            'resize_method': 'pillow',
+            'resize_method': 'imagemagick',
             'output_formats': ['jpg', 'png'],
             'features': ['background_removal', 'resize', 'crop'],
             'crop_positions': VALID_CROP_POSITIONS,
