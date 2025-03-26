@@ -12,6 +12,7 @@ import concurrent.futures
 import threading
 import logging
 import logging.handlers
+import subprocess
 
 app = Flask(__name__)
 
@@ -147,6 +148,112 @@ def process_with_bria(input_image, content_moderation=False):
     except Exception as e:
         logger.error(f"Erreur lors du traitement avec Bria.ai: {str(e)}")
         raise
+
+def convert_with_xnconvert(input_image, width=None, height=None):
+    """
+    Convertit l'image avec XnConvert en utilisant les paramètres par défaut
+    et les dimensions spécifiées
+    """
+    try:
+        # Créer un ID unique pour les fichiers temporaires
+        temp_id = str(uuid.uuid4())
+        input_path = os.path.join(UPLOAD_FOLDER, f'temp_input_{temp_id}.png')
+        output_path = os.path.join(OUTPUT_FOLDER, f'temp_output_{temp_id}.jpg')
+
+        # Sauvegarder l'image d'entrée
+        input_image.save(input_path, 'PNG')
+
+        # Préparer la commande XnConvert avec les paramètres par défaut
+        cmd = [
+            'xnconvert',
+            '-resize', f'{width}x{height}',  # Dimensions
+            '-resize_mode', 'fit',           # Mode ajuster
+            '-resize_keep_ratio', '1',       # Conserver le ratio
+            '-resize_filter', 'Hanning',     # Ré-échantillonnage
+            '-crop', 'normal',               # Mode de recadrage
+            '-crop_position', 'top-left',    # Position
+            '-o', output_path,               # Fichier de sortie
+            input_path                       # Fichier d'entrée
+        ]
+
+        # Exécuter XnConvert
+        process = subprocess.run(cmd, capture_output=True, text=True)
+        
+        if process.returncode != 0:
+            raise Exception(f"Erreur XnConvert: {process.stderr}")
+
+        # Lire l'image convertie
+        with open(output_path, 'rb') as f:
+            output_data = BytesIO(f.read())
+
+        # Nettoyer les fichiers temporaires
+        os.remove(input_path)
+        os.remove(output_path)
+
+        return output_data
+
+    except Exception as e:
+        logger.error(f"Erreur lors de la conversion avec XnConvert: {str(e)}")
+        # Nettoyer les fichiers temporaires en cas d'erreur
+        if 'input_path' in locals() and os.path.exists(input_path):
+            os.remove(input_path)
+        if 'output_path' in locals() and os.path.exists(output_path):
+            os.remove(output_path)
+        raise
+
+@app.route('/convert', methods=['POST', 'OPTIONS'])
+def convert_image():
+    # Gérer les requêtes OPTIONS (pre-flight) pour CORS
+    if request.method == 'OPTIONS':
+        return '', 200
+
+    logger.info("Requête reçue sur /convert")
+
+    # Récupérer les paramètres de dimension
+    width = request.args.get('width', type=int)
+    height = request.args.get('height', type=int)
+
+    if not width or not height:
+        return jsonify({'error': 'Les paramètres width et height sont requis'}), 400
+
+    # Vérifier si une image a été envoyée
+    if 'image' not in request.files:
+        logger.error("Aucune image n'a été envoyée")
+        return jsonify({'error': 'Aucune image n\'a été envoyée'}), 400
+
+    file = request.files['image']
+    
+    if file.filename == '':
+        logger.error("Nom de fichier vide")
+        return jsonify({'error': 'Nom de fichier vide'}), 400
+
+    if not allowed_file(file.filename):
+        logger.error(f"Format de fichier non supporté: {file.filename}")
+        return jsonify({'error': f'Format de fichier non supporté. Formats acceptés: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
+
+    try:
+        # Lire l'image
+        input_image = Image.open(file.stream)
+        logger.info(f"Image ouverte, taille originale: {input_image.size}")
+
+        # Convertir l'image avec XnConvert
+        output_data = convert_with_xnconvert(input_image, width, height)
+        
+        # Préparer le nom du fichier de sortie
+        filename = secure_filename(file.filename)
+        output_filename = os.path.splitext(filename)[0] + '.jpg'
+        
+        # Envoyer l'image convertie
+        return send_file(
+            output_data,
+            mimetype='image/jpeg',
+            download_name=output_filename,
+            as_attachment=True
+        )
+
+    except Exception as e:
+        logger.error(f"Erreur pendant la conversion: {str(e)}")
+        return jsonify({'error': f'Erreur pendant la conversion: {str(e)}'}), 500
 
 @app.route('/remove-background', methods=['POST', 'OPTIONS'])
 def remove_background_api():

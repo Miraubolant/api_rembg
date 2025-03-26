@@ -7,6 +7,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     gcc \
     libjpeg-dev \
     zlib1g-dev \
+    xnconvert \  # Ajout de XnConvert
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
