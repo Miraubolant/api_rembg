@@ -22,7 +22,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 RUN wget https://download.xnview.com/XnConvert-linux-x64.tgz && \
     mkdir -p /opt/XnConvert && \
     tar -xzf XnConvert-linux-x64.tgz -C /opt/XnConvert && \
+    chmod +x /opt/XnConvert/XnConvert && \
     ln -s /opt/XnConvert/XnConvert /usr/local/bin/xnconvert && \
+    chmod +x /usr/local/bin/xnconvert && \
     rm XnConvert-linux-x64.tgz
 
 # Copier les fichiers de dépendances
