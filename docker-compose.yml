@@ -11,7 +11,7 @@ services:
       - ./logs:/app/logs
     environment:
       - BRIA_API_TOKEN=${BRIA_API_TOKEN}
-      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS:-https://miremover.fr,http://miremover.fr}
+      - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
       - AUTHORIZED_IPS=${AUTHORIZED_IPS:-127.0.0.1}
     restart: always
     deploy:
