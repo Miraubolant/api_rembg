@@ -19,7 +19,7 @@ app = Flask(__name__)
 BRIA_API_TOKEN = os.environ.get('BRIA_API_TOKEN')
 
 # Obtenir les domaines autorisés depuis une variable d'environnement
-allowed_origins_str = os.environ.get('ALLOWED_ORIGINS', 'https://miremover.fr,http://miremover.fr')
+allowed_origins_str = os.environ.get('ALLOWED_ORIGINS')
 ALLOWED_ORIGINS = [origin.strip() for origin in allowed_origins_str.split(',')]
 
 # Configuration des IPs autorisées
