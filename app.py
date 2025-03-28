@@ -70,7 +70,7 @@ def restrict_access_by_ip():
         logger.warning(f"Tentative d'accès non autorisée depuis l'IP: {client_ip}")
         return jsonify({'error': 'Accès non autorisé'}), 403
 
-def optimize_image_for_processing(image, max_size=5000):
+def optimize_image_for_processing(image, max_size=1500):
     """
     Optimise l'image avant traitement :
     1. Redimensionne si trop grande
