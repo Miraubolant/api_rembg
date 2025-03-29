@@ -511,7 +511,7 @@ def remove_background_api():
         logger.info(f"Image ouverte, taille: {input_image.size}, mode: {input_image.mode}")
         
         # Optimiser l'image avant envoi
-        input_image = optimize_image_for_processing(input_image)
+        # supprimer car pas utilise finalement input_image = optimize_image_for_processing(input_image)
         
         # Traiter l'image avec Bria.ai
         logger.info("Début du traitement avec Bria.ai")
