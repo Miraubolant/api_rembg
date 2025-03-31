@@ -411,7 +411,7 @@ def resize_with_pil(image, width, height, resize_params):
         # Mode "fit" - Ajuste l'image dans les dimensions cibles tout en conservant le ratio
         if resize_mode == 'fit':
             # Créer un fond transparent ou de couleur
-            result_image = Image.new('RGBA', (width, height), color=bg_color + (bg_alpha,))
+            result_image = Image.new('RGBA', (width, height), color=(bg_color, bg_color, bg_color, bg_alpha))
             
             # Déterminer les nouvelles dimensions tout en conservant le ratio
             if keep_ratio:
