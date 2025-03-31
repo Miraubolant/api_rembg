@@ -14,6 +14,9 @@ import concurrent.futures
 import threading
 import logging
 import logging.handlers
+import cv2
+import numpy as np
+from tqdm import tqdm
 
 app = Flask(__name__)
 
@@ -476,6 +479,71 @@ def resize_with_pil(image, width, height, resize_params):
         logger.error(f"Erreur lors du redimensionnement avec PIL: {str(e)}")
         raise
 
+# Fonctions pour le traitement du visage (intégrées depuis le second code)
+def crop_below_mouth(image):
+    """
+    Détecte le visage sur une image PIL, garde uniquement la partie en dessous de la bouche,
+    et redimensionne l'image aux dimensions d'origine.
+    
+    Args:
+        image: Image PIL à traiter
+        
+    Returns:
+        Image PIL traitée ou None en cas d'échec
+    """
+    try:
+        # Convertir l'image PIL en format OpenCV
+        img_array = np.array(image)
+        img = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
+        
+        # Obtenir les dimensions originales de l'image
+        original_height, original_width = img.shape[:2]
+        
+        # Charger les classificateurs pré-entraînés pour la détection du visage
+        face_cascade_path = cv2.data.haarcascades + 'haarcascade_frontalface_default.xml'
+        
+        if not os.path.exists(face_cascade_path):
+            logger.error(f"Fichier de cascade introuvable: {face_cascade_path}")
+            return None
+            
+        face_cascade = cv2.CascadeClassifier(face_cascade_path)
+        
+        # Convertir en niveau de gris pour la détection
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        
+        # Détecter les visages avec OpenCV
+        faces = face_cascade.detectMultiScale(gray, 1.1, 4)
+        
+        if len(faces) == 0:
+            logger.info("Aucun visage détecté dans l'image")
+            return None
+        
+        # Prendre le premier visage détecté
+        x, y, w, h = faces[0]
+        
+        # Estimer la position de la bouche en fonction des proportions du visage (environ 70-75% depuis le haut)
+        mouth_y = y + int(h * 0.75)
+        
+        # Découper l'image pour ne garder que la partie en dessous de la bouche
+        cropped = img[mouth_y:original_height, 0:original_width]
+        
+        if cropped.size == 0:
+            logger.info("Échec de la découpe: image résultante vide")
+            return None
+        
+        # Redimensionner l'image coupée aux dimensions d'origine
+        resized = cv2.resize(cropped, (original_width, original_height), interpolation=cv2.INTER_LANCZOS4)
+        
+        # Convertir l'image OpenCV en image PIL
+        resized_rgb = cv2.cvtColor(resized, cv2.COLOR_BGR2RGB)
+        result_image = Image.fromarray(resized_rgb)
+        
+        return result_image
+        
+    except Exception as e:
+        logger.error(f"Erreur lors du traitement du visage: {str(e)}")
+        return None
+
 @app.route('/remove-background', methods=['POST', 'OPTIONS'])
 def remove_background_api():
     # Gérer les requêtes OPTIONS (pre-flight) pour CORS
@@ -740,3 +808,267 @@ def resize_image_api():
                 os.remove(output_path)
         except Exception as e:
             logger.warning(f"Erreur lors du nettoyage des fichiers temporaires: {str(e)}")
+
+@app.route('/crop-below-mouth', methods=['POST', 'OPTIONS'])
+def crop_below_mouth_api():
+    """
+    Route API pour la fonctionnalité de détection de visage et découpage en dessous de la bouche.
+    Cette route prend une image en entrée et renvoie l'image redimensionnée avec uniquement
+    la partie en dessous de la bouche.
+    """
+    # Gérer les requêtes OPTIONS (pre-flight) pour CORS
+    if request.method == 'OPTIONS':
+        return '', 200
+        
+    logger.info("Requête reçue sur /crop-below-mouth")
+    
+    # Vérifier si une image a été envoyée
+    if 'image' not in request.files:
+        logger.error("Aucune image n'a été envoyée")
+        return jsonify({'error': 'Aucune image n\'a été envoyée'}), 400
+    
+    file = request.files['image']
+    logger.info(f"Fichier reçu: {file.filename}")
+    
+    # Vérifier si le fichier est valide
+    if file.filename == '':
+        logger.error("Nom de fichier vide")
+        return jsonify({'error': 'Nom de fichier vide'}), 400
+    
+    if not allowed_file(file.filename):
+        logger.error(f"Format de fichier non supporté: {file.filename}")
+        return jsonify({'error': f'Format de fichier non supporté. Formats acceptés: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
+    
+    try:
+        # Lire le fichier en mémoire
+        file_data = file.read()
+        input_image = Image.open(BytesIO(file_data))
+        logger.info(f"Image ouverte, taille: {input_image.size}, mode: {input_image.mode}")
+        
+        # Traiter l'image pour détecter le visage et découper en dessous de la bouche
+        future = thread_pool.submit(crop_below_mouth, input_image)
+        output_image = future.result()
+        
+        if output_image is None:
+            logger.error("Échec du traitement: aucun visage détecté ou erreur de découpage")
+            return jsonify({'error': 'Échec du traitement. Aucun visage détecté ou erreur lors du découpage.'}), 400
+        
+        logger.info(f"Traitement terminé avec succès, taille de l'image résultante: {output_image.size}")
+        
+        # Préparer l'image pour l'envoi
+        img_io = BytesIO()
+        
+        # Déterminer le format de sortie
+        output_format = 'JPEG'
+        mimetype = 'image/jpeg'
+        
+        # Si l'image d'entrée est un PNG, conserver le format PNG
+        if file.filename.lower().endswith('.png'):
+            output_format = 'PNG'
+            mimetype = 'image/png'
+        
+        # Ajuster le format de sortie selon le mode de l'image
+        if output_image.mode == 'RGBA' and output_format == 'JPEG':
+            output_image = output_image.convert('RGB')
+        
+        # Sauvegarder dans le buffer
+        if output_format == 'JPEG':
+            output_image.save(img_io, format='JPEG', quality=90)
+        else:
+            output_image.save(img_io, format='PNG')
+            
+        img_io.seek(0)
+        
+        # Afficher les informations sur la taille de l'image
+        img_size = img_io.getbuffer().nbytes
+        logger.info(f"Taille de l'image à envoyer: {img_size} octets")
+        
+        # Envoyer l'image avec le bon type MIME
+        response = send_file(
+            img_io, 
+            mimetype=mimetype,
+            download_name=f"below_mouth_{file.filename}",
+            as_attachment=True
+        )
+        
+        # Ajouter des en-têtes pour éviter la mise en cache
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers["Content-Length"] = str(img_size)
+        
+        return response
+        
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"ERREUR: {str(e)}")
+        logger.error(f"DÉTAILS: {error_details}")
+        return jsonify({'error': f'Erreur pendant le traitement: {str(e)}', 'details': error_details}), 500
+    
+    finally:
+        # Nettoyer les ressources
+        if 'input_image' in locals():
+            input_image.close()
+        if 'output_image' in locals() and output_image is not None:
+            output_image.close()
+
+# Route combinée pour traiter une image avec plusieurs opérations
+@app.route('/process-image', methods=['POST', 'OPTIONS'])
+def process_image_api():
+    """
+    Route API pour traiter une image avec plusieurs opérations en séquence.
+    Options disponibles: suppression de fond, découpage sous la bouche, redimensionnement.
+    """
+    # Gérer les requêtes OPTIONS (pre-flight) pour CORS
+    if request.method == 'OPTIONS':
+        return '', 200
+        
+    logger.info("Requête reçue sur /process-image")
+    
+    # Récupérer les paramètres de traitement
+    remove_bg = request.args.get('remove_bg', 'false').lower() in ('true', '1', 't', 'y', 'yes')
+    crop_mouth = request.args.get('crop_mouth', 'false').lower() in ('true', '1', 't', 'y', 'yes')
+    resize = request.args.get('resize', 'false').lower() in ('true', '1', 't', 'y', 'yes')
+    content_moderation = request.args.get('content_moderation', 'false').lower() in ('true', '1', 't', 'y', 'yes')
+    
+    # Paramètres de redimensionnement
+    width = 0
+    height = 0
+    if resize:
+        try:
+            width = int(request.args.get('width', 0))
+            height = int(request.args.get('height', 0))
+            
+            if width <= 0 or height <= 0:
+                logger.error(f"Dimensions invalides: largeur={width}, hauteur={height}")
+                return jsonify({'error': 'Pour le redimensionnement, les dimensions width et height doivent être des entiers positifs'}), 400
+        except ValueError:
+            logger.error("Dimensions non numériques fournies")
+            return jsonify({'error': 'Les dimensions width et height doivent être des entiers positifs'}), 400
+    
+    # Récupérer les paramètres de redimensionnement (si nécessaire)
+    resize_params = {
+        'RESIZE_MODE': request.args.get('mode', DEFAULT_RESIZE_PARAMS['RESIZE_MODE']),
+        'KEEP_RATIO': request.args.get('keep_ratio', DEFAULT_RESIZE_PARAMS['KEEP_RATIO']),
+        'RESAMPLING': request.args.get('resampling', DEFAULT_RESIZE_PARAMS['RESAMPLING']),
+        'CROP_POSITION': request.args.get('crop', DEFAULT_RESIZE_PARAMS['CROP_POSITION']),
+        'BG_COLOR': request.args.get('bg_color', DEFAULT_RESIZE_PARAMS['BG_COLOR']),
+        'BG_ALPHA': request.args.get('bg_alpha', DEFAULT_RESIZE_PARAMS['BG_ALPHA'])
+    }
+    
+    # Vérifier si une image a été envoyée
+    if 'image' not in request.files:
+        logger.error("Aucune image n'a été envoyée")
+        return jsonify({'error': 'Aucune image n\'a été envoyée'}), 400
+    
+    file = request.files['image']
+    logger.info(f"Fichier reçu: {file.filename}")
+    
+    # Vérifier si le fichier est valide
+    if file.filename == '':
+        logger.error("Nom de fichier vide")
+        return jsonify({'error': 'Nom de fichier vide'}), 400
+    
+    if not allowed_file(file.filename):
+        logger.error(f"Format de fichier non supporté: {file.filename}")
+        return jsonify({'error': f'Format de fichier non supporté. Formats acceptés: {", ".join(ALLOWED_EXTENSIONS)}'}), 400
+    
+    try:
+        # Lire le fichier en mémoire
+        file_data = file.read()
+        current_image = Image.open(BytesIO(file_data))
+        logger.info(f"Image ouverte, taille: {current_image.size}, mode: {current_image.mode}")
+        
+        # Chaîne de traitement
+        if remove_bg:
+            logger.info("Début du traitement avec Bria.ai pour suppression de fond")
+            future = thread_pool.submit(process_with_bria, current_image, content_moderation)
+            current_image = future.result()
+            logger.info(f"Suppression de fond terminée, nouveau mode: {current_image.mode}")
+        
+        if crop_mouth:
+            logger.info("Début du découpage sous la bouche")
+            mouth_result = crop_below_mouth(current_image)
+            if mouth_result is None:
+                logger.warning("Aucun visage détecté, le découpage sous la bouche est ignoré")
+            else:
+                current_image = mouth_result
+                logger.info("Découpage sous la bouche terminé")
+                
+        if resize and width > 0 and height > 0:
+            logger.info(f"Début du redimensionnement à {width}x{height}")
+            current_image = resize_with_pil(current_image, width, height, resize_params)
+            logger.info("Redimensionnement terminé")
+        
+        # Déterminer le format de sortie
+        output_format = 'JPEG'
+        mimetype = 'image/jpeg'
+        file_ext = 'jpg'
+        
+        # Si le fichier d'entrée est un PNG ou si nous avons supprimé le fond (transparence), utiliser PNG
+        if file.filename.lower().endswith('.png') or (remove_bg and current_image.mode == 'RGBA'):
+            output_format = 'PNG'
+            mimetype = 'image/png'
+            file_ext = 'png'
+        
+        # Préparer l'image pour l'envoi
+        img_io = BytesIO()
+        
+        # Ajuster le format de sortie selon le mode de l'image
+        if current_image.mode == 'RGBA' and output_format == 'JPEG':
+            # JPEG ne supporte pas la transparence, convertir en RGB
+            current_image = current_image.convert('RGB')
+        
+        # Sauvegarder dans le buffer
+        if output_format == 'JPEG':
+            current_image.save(img_io, format='JPEG', quality=90)
+        else:
+            current_image.save(img_io, format='PNG')
+            
+        img_io.seek(0)
+        
+        # Afficher les informations sur la taille de l'image
+        img_size = img_io.getbuffer().nbytes
+        logger.info(f"Taille de l'image finale: {img_size} octets")
+        
+        # Envoyer l'image avec le bon type MIME
+        response = send_file(
+            img_io, 
+            mimetype=mimetype,
+            download_name=f"processed_image.{file_ext}",
+            as_attachment=True
+        )
+        
+        # Ajouter des en-têtes pour éviter la mise en cache
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+        response.headers["Content-Length"] = str(img_size)
+        
+        return response
+        
+    except Exception as e:
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"ERREUR: {str(e)}")
+        logger.error(f"DÉTAILS: {error_details}")
+        return jsonify({'error': f'Erreur pendant le traitement: {str(e)}', 'details': error_details}), 500
+    
+    finally:
+        # Nettoyer les ressources
+        if 'current_image' in locals():
+            current_image.close()
+
+if __name__ == '__main__':
+    # Configuration du serveur
+    port = int(os.environ.get('PORT', 5000))
+    debug = os.environ.get('DEBUG', 'false').lower() in ('true', '1', 't', 'y', 'yes')
+    
+    logger.info(f"Démarrage du serveur sur le port {port}, debug={debug}")
+    logger.info(f"Origines CORS autorisées: {ALLOWED_ORIGINS}")
+    logger.info(f"IPs autorisées: {AUTHORIZED_IPS}")
+    logger.info(f"ImageMagick disponible: {IMAGEMAGICK_AVAILABLE}")
+    logger.info(f"GraphicsMagick disponible: {GRAPHICSMAGICK_AVAILABLE}")
+    
+    app.run(host='0.0.0.0', port=port, debug=debug)

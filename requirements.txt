@@ -5,3 +5,6 @@ pillow==9.5.0
 requests==2.31.0
 gunicorn==20.1.0
 python-dotenv==1.0.0
+numpy==1.24.2
+opencv-python==4.7.0.72
+tqdm==4.65.0
