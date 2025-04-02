@@ -492,22 +492,16 @@ def resize_with_pil(image, width, height, resize_params):
 # Fonctions pour le traitement du visage (intégrées depuis le second code)
 def crop_below_mouth(image, resampling_filter='lanczos'):
     """
-    Détecte le visage sur une image PIL, garde uniquement la partie en dessous de la bouche,
-    et redimensionne l'image aux dimensions d'origine avec ImageMagick.
+    Détecte le visage sur une image PIL, garde uniquement la partie en dessous de la bouche.
     
     Args:
         image: Image PIL à traiter
-        resampling_filter: Filtre de rééchantillonnage ImageMagick (lanczos, mitchell, bicubic, etc.)
+        resampling_filter: Paramètre conservé pour compatibilité mais non utilisé
         
     Returns:
         Image PIL traitée ou None en cas d'échec
     """
     try:
-        # Vérifier si ImageMagick est disponible
-        if not shutil.which('convert'):
-            logger.error("ImageMagick n'est pas disponible. Impossible d'utiliser le redimensionnement ImageMagick.")
-            return None
-            
         # Convertir l'image PIL en format OpenCV
         img_array = np.array(image)
         img = cv2.cvtColor(img_array, cv2.COLOR_RGB2BGR)
@@ -547,48 +541,12 @@ def crop_below_mouth(image, resampling_filter='lanczos'):
             logger.info("Échec de la découpe: image résultante vide")
             return None
         
-        # Générer des noms de fichiers temporaires uniques
-        unique_id = str(uuid.uuid4())
-        temp_input = os.path.join(UPLOAD_FOLDER, f"{unique_id}_cropped.png")
-        temp_output = os.path.join(OUTPUT_FOLDER, f"{unique_id}_resized.png")
+        # Convertir l'image découpée en PIL et la retourner
+        cropped_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
+        cropped_pil = Image.fromarray(cropped_rgb)
         
-        try:
-            # Sauvegarder l'image découpée dans un fichier temporaire
-            cropped_rgb = cv2.cvtColor(cropped, cv2.COLOR_BGR2RGB)
-            cropped_pil = Image.fromarray(cropped_rgb)
-            cropped_pil.save(temp_input, format='PNG')
-            
-            # Construire la commande ImageMagick pour le redimensionnement
-            cmd = [
-                'convert',
-                temp_input,
-                '-filter', resampling_filter,  # Filtre de rééchantillonnage
-                '-resize', f'{original_width}x{original_height}!',  # Redimensionner aux dimensions exactes
-                temp_output
-            ]
-            
-            # Exécuter la commande ImageMagick
-            subprocess.run(cmd, check=True, capture_output=True)
-            logger.info(f"Redimensionnement avec ImageMagick réussi: {' '.join(cmd)}")
-            
-            # Charger l'image redimensionnée
-            result_image = Image.open(temp_output)
-            
-            return result_image
-            
-        finally:
-            # Nettoyer les fichiers temporaires
-            try:
-                if os.path.exists(temp_input):
-                    os.remove(temp_input)
-                if os.path.exists(temp_output):
-                    os.remove(temp_output)
-            except Exception as e:
-                logger.warning(f"Erreur lors du nettoyage des fichiers temporaires: {str(e)}")
+        return cropped_pil
         
-    except subprocess.CalledProcessError as e:
-        logger.error(f"Erreur ImageMagick: {e.stderr.decode() if e.stderr else str(e)}")
-        return None
     except Exception as e:
         logger.error(f"Erreur lors du traitement du visage: {str(e)}")
         return None
