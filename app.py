@@ -410,35 +410,64 @@ def resize_with_pil(image, width, height, resize_params):
         
         # Mode "fit" - Ajuste l'image dans les dimensions cibles tout en conservant le ratio
         if resize_mode == 'fit':
-            # Créer un fond transparent ou de couleur
-            # Version corrigée pour des couleurs standards
-            if bg_color.lower() == 'white':
-                rgb = (255, 255, 255)
-            elif bg_color.lower() == 'black':
-                rgb = (0, 0, 0)
-            # Ajoutez d'autres couleurs au besoin...
-            else:
-                # Couleur par défaut (blanc)
-                rgb = (255, 255, 255)
-
-            result_image = Image.new('RGBA', (width, height), color=(*rgb, bg_alpha))
-            
-            # Déterminer les nouvelles dimensions tout en conservant le ratio
             if keep_ratio:
-                # Calculer le ratio pour conserver les proportions
-                ratio = min(width / orig_width, height / orig_height)
-                new_width = int(orig_width * ratio)
-                new_height = int(orig_height * ratio)
+                # Calculer les ratios
+                ratio_width = width / orig_width
+                ratio_height = height / orig_height
                 
-                # Redimensionner l'image
-                resized = image.resize((new_width, new_height), resampling_method)
-                
-                # Calculer la position pour centrer l'image
-                x_offset = (width - new_width) // 2
-                y_offset = (height - new_height) // 2
-                
-                # Placer l'image redimensionnée sur le fond
-                result_image.paste(resized, (x_offset, y_offset), resized if resized.mode == 'RGBA' else None)
+                if ratio_width > ratio_height:
+                    # L'image sera plus large proportionnellement
+                    # Redimensionner selon la largeur, puis rogner en hauteur
+                    new_width = width
+                    new_height = int(orig_height * ratio_width)
+                    
+                    # Redimensionner
+                    resized = image.resize((new_width, new_height), resampling_method)
+                    
+                    # Calculer les coordonnées de rognage
+                    left = 0
+                    right = new_width
+                    
+                    if crop_position == 'center':
+                        top = (new_height - height) // 2
+                    elif crop_position == 'top':
+                        top = 0
+                    elif crop_position == 'bottom':
+                        top = new_height - height
+                    else:  # Par défaut, centre
+                        top = (new_height - height) // 2
+                        
+                    bottom = top + height
+                    
+                    # Rogner l'image
+                    result_image = resized.crop((left, top, right, bottom))
+                    
+                else:
+                    # L'image sera plus haute proportionnellement
+                    # Redimensionner selon la hauteur, puis rogner en largeur
+                    new_height = height
+                    new_width = int(orig_width * ratio_height)
+                    
+                    # Redimensionner
+                    resized = image.resize((new_width, new_height), resampling_method)
+                    
+                    # Calculer les coordonnées de rognage
+                    top = 0
+                    bottom = new_height
+                    
+                    if crop_position == 'center':
+                        left = (new_width - width) // 2
+                    elif crop_position == 'left':
+                        left = 0
+                    elif crop_position == 'right':
+                        left = new_width - width
+                    else:  # Par défaut, centre
+                        left = (new_width - width) // 2
+                        
+                    right = left + width
+                    
+                    # Rogner l'image
+                    result_image = resized.crop((left, top, right, bottom))
             else:
                 # Redimensionner sans conserver le ratio
                 resized = image.resize((width, height), resampling_method)
